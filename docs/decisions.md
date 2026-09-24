@@ -174,3 +174,33 @@ Tracked here until decided; none of them block P0.
 - **Recovery codes are returned once as `{code, salt}`.** The per-code salt is
   public and already stored server-side; without it the client cannot build the
   recovery wrapping.
+
+## P4 decisions (local layer)
+
+- **Migrate into a new database, never in place.** §21 requires the old database
+  to survive a failed migration, and Dexie's own `upgrade()` mutates in place, so
+  each migration copies into a versioned database, verifies the row counts and
+  only then moves the pointer and deletes the previous copy. Verified against
+  Dexie 4 that opening a database with _fewer_ declared versions exposes only the
+  older view and does not modify the stored data.
+- **The database version is read from the database.** Trusting our own metadata
+  would mean that a stale pointer after a crash could migrate the wrong table set
+  and then delete the real database. Reading the stored version also exposed that
+  Dexie scales versions ×10 in IndexedDB, and that `indexedDB.open()` creates a
+  database as a side effect, so existence is checked first.
+- **The device key is non-extractable.** It can wrap and unwrap the DEK but cannot
+  be exported, so script cannot read it out. Offline unlock is therefore local to
+  the device, and a revoked session destroys it.
+- **Eviction is only ever about cached attachment ciphertext.** Notes, folders and
+  tags are small and are what makes offline use work, so they are not candidates.
+  A row is evictable only when it is synced _and_ has no queued change, because
+  `syncedAt` can be stale while an edit is still waiting to upload.
+- **Eviction accounting uses the row's own `sizeBytes`**, not `blob.size`: it is
+  the size the server reported, it survives every storage round trip, and it does
+  not depend on how an IndexedDB implementation clones a `Blob`.
+- **The service worker never self-activates.** Updates are gated by a pure
+  function that fails closed: an unreadable queue counts as "there is work", and
+  an update in flight during a sync is deferred.
+- **The shell is served only to browser navigations.** A request that does not ask
+  for HTML, or any `/api/*` path, keeps the JSON error contract, so an asset can
+  never be returned where a caller parses JSON.

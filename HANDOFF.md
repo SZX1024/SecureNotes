@@ -443,3 +443,47 @@ logout 带 CSRF   → 200，2 个 Cookie 被清除（Max-Age=0）
 
 - `POST /recovery-codes/regenerate`（重新包裹 10 个恢复码）未实现——它需要「已登录 + 已解锁」的客户端流程，放在 P4/P5。
 - P4 需要：Dexie 存储、**不可导出设备密钥**包裹 DEK、App Lock 40 分钟、收到 401 时销毁本地密钥材料、启动时用 `GET /key-material` 解锁。
+
+## 15. P4 完成记录（本地层与 PWA，本次）
+
+### 15.1 交付物
+
+| 文件                               | 内容                                                                                                     |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `apps/web/src/local/schema.ts`     | Dexie schema：`SCHEMA_DEFINITIONS`（v1/v2）逐版本声明、可「按版本上限」打开                              |
+| `apps/web/src/local/migrations.ts` | **影子库迁移**：读数据库自身版本 → 只读打开旧库 → 建新库并复制 → 校验行数 → 才切换指针并删除旧库         |
+| `apps/web/src/local/device-key.ts` | 不可导出设备 CryptoKey（持久化在 IndexedDB）；`wrapDekForDevice`/`unwrapDekForDevice`；`forgetDeviceKey` |
+| `apps/web/src/local/key-store.ts`  | 内存密钥持有（DEK + TOTP secret）、App Lock 40 分钟（惰性判定）、`pagehide`/`beforeunload`/`freeze` 即清 |
+| `apps/web/src/local/eviction.ts`   | 只淘汰**已同步且无排队改动**的附件缓存；按行内 `sizeBytes` 计账                                          |
+| `apps/web/src/local/sync-queue.ts` | 队列读/入队/确认/失败退避（只有服务端确认才移除）                                                        |
+| `apps/web/src/pwa/update-gate.ts`  | 纯函数更新门控（fail-closed）                                                                            |
+| `apps/web/src/pwa/register.ts`     | SW 注册 + 门控激活 + 同步成功后应用延迟更新                                                              |
+| `apps/web/public/sw.js`            | 离线应用外壳；**绝不缓存 `/api/*`**；不自行 skipWaiting                                                  |
+| `apps/worker/wrangler.toml`        | `[assets]` + `run_worker_first = ["/api/*"]`；worker 只对「要求 HTML 且非 /api」的请求返回外壳           |
+| `docs/local-layer.md`              | 上述设计与理由                                                                                           |
+
+### 15.2 本次实测出来的 4 个事实（都改变了实现）
+
+1. **Dexie 不会因「声明版本低于已存版本」而报错**：它按声明版本打开、只暴露该版本的表，**且不修改已存数据库**——这正是影子库迁移所需的安全属性（我原以为会抛 `VersionError`，文档与注释已按实测更正）。
+2. **Dexie 在 IndexedDB 里把版本号 ×10 存储**（`verno=2` → `version=20`），读原始版本必须除以 10。
+3. **`indexedDB.open(name)` 对不存在的库会「创建」它**：因此必须先 `Dexie.exists()` 再探版本，否则全新设备会被误判成「有旧库要迁移」，还会留下一个空库。
+4. **`CryptoKey` 从 IndexedDB 读回是新对象**（结构化克隆），所以「同一把设备密钥」只能用**行为**证明（用 A 包裹、用 B 解开得到同一 DEK），不能用 `toBe`。
+
+另：fake-indexeddb 不会保留 `Blob` 的 `size`，因此淘汰计账改用行内 `sizeBytes`（本来也更稳）。
+
+### 15.3 与既有代码的交互
+
+- `notFound` 现在只在「非 `/api` 且 `Accept` 含 `text/html`」时返回应用外壳，其余保持 JSON 404 —— 这样 P0 的既有测试与 API 契约都不受影响。
+- ESLint 为 `public/sw.js` 单独加了 `globals.serviceworker`（否则 `self`/`caches` 报未定义）。
+- `apps/web/src/test/setup.ts` 现提供 `fake-indexeddb` 与 Node WebCrypto（jsdom 两者都没有），测试用的是**真实**的 Dexie/IndexedDB/WebCrypto，而非 mock。
+
+### 15.4 验证
+
+`pnpm check` exit 0；`packages/shared` 31 + `apps/web` **42** + `apps/worker` 145 = **218** 测试。新增 32 个测试覆盖：迁移保数据、迁移失败保旧库、半成品目标被丢弃、设备密钥不可导出、App Lock 40 分钟与页面关闭清理、淘汰只碰已同步且未排队的数据、SW 更新门控 fail-closed、队列确认语义。
+
+### 15.5 未完成 / 留给 P5
+
+- **§32「Offline」与「Platform」大部分验收项需要真实数据域**（笔记/附件/搜索/离线编辑），P5 才能端到端证明；P4 只交付了它们依赖的底座。
+- 应用外壳目前仍是 P0 的连通性展示页；真实三栏 UI 与编辑器属 P5/P6。
+- `manifest.webmanifest` 仍是占位（PNG 图标、更多尺寸）——P9 前补。
+- `App.tsx` 尚未接入 KeyStore/解锁界面（需要登录流程与数据域，P5）。

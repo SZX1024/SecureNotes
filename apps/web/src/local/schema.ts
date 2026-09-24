@@ -1,0 +1,199 @@
+import Dexie, { type EntityTable } from "dexie";
+import type { CryptoEnvelope } from "@securenotes/shared";
+
+/**
+ * Local database schema (§8, §21).
+ *
+ * Everything stored here is either ciphertext or metadata the server may also
+ * see. The only key material is a *wrapped* DEK — never a plaintext key — and
+ * never note plaintext: decrypted content exists only in memory while the app is
+ * unlocked (§7).
+ *
+ * Every version is declared in `SCHEMA_DEFINITIONS`, and a database can be opened
+ * *up to* a version. That is what lets the migration runner read an old database
+ * without Dexie silently upgrading it in place.
+ */
+
+/** Ciphertext of a note, plus the fields sync needs. */
+export interface LocalNote {
+  id: string;
+  folderId: string | null;
+  revision: number;
+  /** The encrypted Markdown payload; the title lives inside it. */
+  payload: CryptoEnvelope;
+  deletedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+  /** When the server last confirmed this revision; null means never synced. */
+  syncedAt: number | null;
+}
+
+export interface LocalFolder {
+  id: string;
+  parentId: string | null;
+  depth: number;
+  name: CryptoEnvelope;
+  deletedAt: number | null;
+  sortOrder: number;
+  createdAt: number;
+  updatedAt: number;
+  syncedAt: number | null;
+}
+
+export interface LocalTag {
+  id: string;
+  name: CryptoEnvelope;
+  createdAt: number;
+  updatedAt: number;
+  syncedAt: number | null;
+}
+
+export interface LocalNoteTag {
+  noteId: string;
+  tagId: string;
+  syncedAt: number | null;
+}
+
+export interface LocalAttachment {
+  id: string;
+  r2Key: string;
+  contentType: string;
+  sizeBytes: number;
+  name: CryptoEnvelope;
+  /** Cached ciphertext, evictable because it can be re-downloaded (§8). */
+  cachedBlob: Blob | null;
+  cachedAt: number | null;
+  createdAt: number;
+  syncedAt: number | null;
+}
+
+/**
+ * The upload queue (§16). Entries are never dropped automatically: an unsynced
+ * change is the one thing the app must not lose (§8).
+ */
+export interface SyncQueueItem {
+  id?: number;
+  objectType: string;
+  objectId: string;
+  operation: "create" | "update" | "delete";
+  baseRevision: number | null;
+  queuedAt: number;
+  attempts: number;
+  nextAttemptAt: number | null;
+}
+
+/** The account's wrapped key material, mirroring what the server stores. */
+export interface LocalKeyMaterial {
+  id: "account";
+  userId: string;
+  kdfSalt: string;
+  keyVersion: number;
+  /** DEK wrapped by the KEK, portable across devices. */
+  wrappedDek: CryptoEnvelope | null;
+  /** DEK wrapped by this device's non-extractable key, for offline unlock. */
+  deviceWrappedDek: CryptoEnvelope | null;
+  updatedAt: number;
+}
+
+/**
+ * The device key itself. `CryptoKey` is structured-cloneable, so a
+ * non-extractable key can be persisted and still never be read back as bytes.
+ */
+export interface LocalDeviceKey {
+  id: "device";
+  key: CryptoKey;
+  createdAt: number;
+}
+
+export interface LocalMeta {
+  key: string;
+  value: unknown;
+}
+
+export interface SchemaDefinition {
+  version: number;
+  stores: Record<string, string>;
+}
+
+/**
+ * The schema, in version order. A new version is appended and never edited, so an
+ * old installation always has a definition it can be read with.
+ */
+export const SCHEMA_DEFINITIONS: readonly SchemaDefinition[] = [
+  {
+    version: 1,
+    stores: {
+      notes: "id, folderId, updatedAt, deletedAt, syncedAt",
+      folders: "id, parentId, updatedAt, syncedAt",
+      tags: "id, updatedAt, syncedAt",
+      noteTags: "[noteId+tagId], noteId, tagId",
+      attachments: "id, syncedAt",
+      syncQueue: "++id, objectId, queuedAt",
+      keyMaterial: "id",
+      meta: "key",
+    },
+  },
+  {
+    // Adds the device key store (§7) and indexes the queue by time so the oldest
+    // pending change can be found without a full scan.
+    version: 2,
+    stores: {
+      notes: "id, folderId, updatedAt, deletedAt, syncedAt",
+      folders: "id, parentId, updatedAt, syncedAt",
+      tags: "id, updatedAt, syncedAt",
+      noteTags: "[noteId+tagId], noteId, tagId",
+      attachments: "id, syncedAt, cachedAt",
+      syncQueue: "++id, objectId, queuedAt, nextAttemptAt",
+      keyMaterial: "id",
+      deviceKeys: "id",
+      meta: "key",
+    },
+  },
+];
+
+export const SCHEMA_VERSION = SCHEMA_DEFINITIONS[SCHEMA_DEFINITIONS.length - 1]!.version;
+
+/** Database names are versioned so a migration never overwrites the old copy. */
+export function databaseNameFor(version: number): string {
+  return `securenotes-v${version}`;
+}
+
+export class SecureNotesDatabase extends Dexie {
+  notes!: EntityTable<LocalNote, "id">;
+  folders!: EntityTable<LocalFolder, "id">;
+  tags!: EntityTable<LocalTag, "id">;
+  noteTags!: EntityTable<LocalNoteTag, "noteId">;
+  attachments!: EntityTable<LocalAttachment, "id">;
+  syncQueue!: EntityTable<SyncQueueItem, "id">;
+  keyMaterial!: EntityTable<LocalKeyMaterial, "id">;
+  deviceKeys!: EntityTable<LocalDeviceKey, "id">;
+  meta!: EntityTable<LocalMeta, "key">;
+
+  /**
+   * @param maxVersion highest schema version to declare.
+   *
+   * Declaring *fewer* versions than the stored database has is safe and is what
+   * the migration runner relies on: verified against Dexie 4, opening such a
+   * database exposes only the declared tables and leaves the stored version —
+   * and therefore the data — untouched. Dexie only ever upgrades in place when
+   * the declared version is higher than the stored one, which this code never
+   * does for an existing database.
+   */
+  constructor(name: string, maxVersion: number = SCHEMA_VERSION) {
+    super(name);
+    for (const definition of SCHEMA_DEFINITIONS) {
+      if (definition.version > maxVersion) {
+        break;
+      }
+      this.version(definition.version).stores(definition.stores);
+    }
+  }
+}
+
+/** Opens the database, declaring at most `maxVersion`. */
+export function openDatabase(
+  name: string,
+  maxVersion: number = SCHEMA_VERSION,
+): SecureNotesDatabase {
+  return new SecureNotesDatabase(name, maxVersion);
+}

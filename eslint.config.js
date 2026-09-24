@@ -49,6 +49,15 @@ export default tseslint.config(
   },
 
   {
+    // The service worker runs in its own global scope, not the window's.
+    files: ["apps/web/public/sw.js"],
+    languageOptions: {
+      ecmaVersion: 2023,
+      sourceType: "script",
+      globals: { ...globals.serviceworker },
+    },
+  },
+  {
     files: ["apps/web/**/*.{ts,tsx}"],
     ...reactHooks.configs.flat.recommended,
   },

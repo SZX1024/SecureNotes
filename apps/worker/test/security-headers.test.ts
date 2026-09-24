@@ -108,6 +108,7 @@ function productionEnv(): Env {
     ENVIRONMENT: "production",
     DB: testBindings.DB,
     ATTACHMENTS: testBindings.ATTACHMENTS,
+    ASSETS: testBindings.ASSETS,
     ALLOWED_ORIGINS: "https://notes.example.com",
     SECRET_WRAP_KEY: testBindings.SECRET_WRAP_KEY,
     CSRF_SIGNING_KEY: testBindings.CSRF_SIGNING_KEY,

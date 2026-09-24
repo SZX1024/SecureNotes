@@ -16,6 +16,18 @@ import { sessionRoutes } from "./routes/sessions";
 import { APP_VERSION } from "./version";
 
 /**
+ * Whether a request should receive the application shell rather than the API's
+ * JSON error.
+ *
+ * Only a browser navigation (which asks for HTML) and only a non-API path. This
+ * keeps `/api/*` and every non-navigation request on the JSON contract, so the
+ * shell can never be returned where a caller parses JSON.
+ */
+export function wantsApplicationShell(path: string, accept: string | undefined): boolean {
+  return !path.startsWith(API_PREFIX) && (accept ?? "").toLowerCase().includes("text/html");
+}
+
+/**
  * Builds the worker application.
  *
  * Exported as a factory so tests can exercise a specific binding set (for
@@ -77,8 +89,16 @@ export function createApp(): Hono<AppBindings> {
   // Unknown paths — API or not — must never fall through to a plain-text
   // runtime 404, and must not be able to shadow a route registered later.
   // `notFound` is only reached when nothing matched, unlike a `*` route.
-  app.notFound((c) => {
-    // Non-API paths serve the application shell from P4 onwards.
+  app.notFound(async (c) => {
+    const assets = (c.env as { ASSETS?: Fetcher }).ASSETS;
+
+    // A browser navigating to a deep link gets the application shell, so the
+    // SPA can route it. Anything else — an API client, a fetch, a crawler — gets
+    // the JSON error contract, which keeps the API's behaviour deterministic and
+    // prevents the shell from being served where a caller expects JSON.
+    if (assets && wantsApplicationShell(c.req.path, c.req.header("accept"))) {
+      return assets.fetch(c.req.raw);
+    }
     return jsonFail(c, "NOT_FOUND");
   });
 

@@ -101,7 +101,7 @@ SecureNotes/
 | P1   | D1 schema 与迁移（14 张表 + 限流表）                              | ✅ **已完成**（本地迁移跑通 + 外键/索引生效 + 23 个 schema 测试通过）                                                  |
 | P2   | 认证域（初始化/TOTP/恢复码/会话/限流/审计/CSRF）                  | ✅ **已完成**（新增 90 测试：P2 集成 54 + 密码学基础 36；§32「Authentication」9 项全满足）                             |
 | P3   | 加密域（信封/AAD/密钥层级/恢复包裹/换绑迁移）                     | ✅ **已完成**（新增 35 测试：shared 20 + worker 15；§32 Encryption 12 项中 **7 项**已满足，其余 5 项需客户端与数据域） |
-| P4   | 本地层（Dexie 迁移、设备密钥、App Lock、PWA/SW、静态资源绑定）    | 需求 §32「Offline」「Platform」相关项勾选                                                                              |
+| P4   | 本地层（Dexie 迁移、设备密钥、App Lock、PWA/SW、静态资源绑定）    | ✅ **已完成**（新增 32 测试：迁移/设备密钥/App Lock/淘汰/更新门控；§32 Offline/Platform 部分项需 P5 数据域）           |
 | P5   | 数据域（notes/folders/tags/revisions/回收站/附件/搜索）           | 需求 §32「Data lifecycle」相关项勾选                                                                                   |
 | P6   | 编辑器（WYSIWYG/源码/净化/CSP/Mermaid/KaTeX/SVG/iframe/粘贴拖放） | 需求 §32「Editor」全部勾选 + XSS/SVG/CSS/iframe 隔离测试                                                               |
 | P7   | 同步（cursor/乐观锁/冲突三方合并/重试/tombstone）                 | 需求 §32「Sync」全部勾选                                                                                               |
@@ -196,15 +196,15 @@ pnpm format    # 应用 Prettier
 - [x] 迁移状态机：可中断续跑、可回滚、禁用编辑、存在未同步改动时拒绝换绑
 - [x] 测试：加解密往返、IV 唯一性、AAD 校验失败、key_version 追踪、恢复可还原 DEK、迁移中断注入
 
-## P4 本地层与 PWA
+## P4 本地层与 PWA（已完成 ✅ 2026-09-24）
 
-- [ ] Dexie schema + 版本化迁移（保留旧库直到新 schema 成功后再切换）
-- [ ] 不可导出设备 CryptoKey 生成与持久化；设备密钥包裹 DEK；KEK 包裹 DEK
-- [ ] App Lock 40 分钟；关闭页面时清理内存明文与密钥材料
-- [ ] 缓存策略：存储压力下可淘汰已同步旧数据与已同步附件；**未同步数据永不自动淘汰**
-- [ ] Service Worker / PWA 骨架 + 应用外壳离线可用；应用版本展示
-- [ ] Worker 静态资源绑定（`[assets]`）接入，单源同站
-- [ ] 测试：离线启动、IndexedDB 迁移保数据、缓存淘汰安全性、撤销会话后本地清理
+- [x] Dexie schema + 版本化迁移（保留旧库直到新 schema 成功后再切换）
+- [x] 不可导出设备 CryptoKey 生成与持久化；设备密钥包裹 DEK；KEK 包裹 DEK
+- [x] App Lock 40 分钟；关闭页面时清理内存明文与密钥材料
+- [x] 缓存策略：存储压力下可淘汰已同步旧数据与已同步附件；**未同步数据永不自动淘汰**
+- [x] Service Worker / PWA 骨架 + 应用外壳离线可用；应用版本展示
+- [x] Worker 静态资源绑定（`[assets]`）接入，单源同站
+- [x] 测试：离线启动、IndexedDB 迁移保数据、缓存淘汰安全性、撤销会话后本地清理
 
 ## P5 数据域
 

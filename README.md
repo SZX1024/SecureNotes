@@ -114,6 +114,7 @@ CI runs the same command on every push and pull request (`.github/workflows/ci.y
 
 - [Architecture](./docs/architecture.md) — trust boundary, request flow, module map
 - [Database schema](./docs/schema.md) — tables, conventions, migrations, deploy prerequisites
+- [Local layer](./docs/local-layer.md) — IndexedDB schema, migration, device key, App Lock, cache policy
 - [Cryptographic format](./docs/crypto-format.md) — envelope, AAD, key hierarchy, migration
 - [API contract](./docs/api-contract.md) — envelope, error codes, endpoints
 - [Threat model](./docs/threat-model.md) — what is defended, what is explicitly accepted
