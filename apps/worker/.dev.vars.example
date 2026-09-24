@@ -1,0 +1,6 @@
+# Copy to `.dev.vars` for local `wrangler dev`. Never commit `.dev.vars`.
+#
+# Secrets are introduced in later phases (P2 auth, P3 crypto). Nothing here is
+# read by the P0 skeleton yet; the file exists so the convention is in place.
+
+# ENVIRONMENT = "development"

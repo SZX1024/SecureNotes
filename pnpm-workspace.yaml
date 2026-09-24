@@ -1,0 +1,10 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+# pnpm 10 blocks lifecycle scripts by default. These dependencies need theirs to
+# provision platform binaries; nothing else in the tree is allowed to run scripts.
+onlyBuiltDependencies:
+  - esbuild
+  - workerd
+  - sharp

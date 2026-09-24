@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="SecureNotes">
+  <rect width="512" height="512" rx="96" fill="#18181b" />
+  <rect x="128" y="96" width="256" height="320" rx="28" fill="#fafafa" />
+  <rect x="168" y="152" width="176" height="20" rx="10" fill="#a1a1aa" />
+  <rect x="168" y="204" width="176" height="20" rx="10" fill="#a1a1aa" />
+  <rect x="168" y="256" width="112" height="20" rx="10" fill="#a1a1aa" />
+  <path
+    d="M256 300c-30 0-54 24-54 54v22h28v-22c0-14 12-26 26-26s26 12 26 26v22h28v-22c0-30-24-54-54-54z"
+    fill="#2563eb"
+  />
+  <rect x="196" y="368" width="120" height="16" rx="8" fill="#2563eb" />
+</svg>

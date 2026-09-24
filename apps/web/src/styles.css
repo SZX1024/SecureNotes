@@ -1,0 +1,99 @@
+/*
+ * Theme: follow system, manual light, manual dark (§22). P0 only implements the
+ * system-following defaults; the manual override lands with the settings UI.
+ * Colours are defined as variables so light/dark stay in one place.
+ */
+:root {
+  color-scheme: light dark;
+  --surface: #ffffff;
+  --surface-muted: #f4f4f5;
+  --border: #d4d4d8;
+  --text: #18181b;
+  --text-muted: #52525b;
+  --accent: #2563eb;
+  --danger: #b91c1c;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface: #18181b;
+    --surface-muted: #27272a;
+    --border: #3f3f46;
+    --text: #fafafa;
+    --text-muted: #a1a1aa;
+    --accent: #60a5fa;
+    --danger: #f87171;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--surface-muted);
+  color: var(--text);
+  font-family:
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
+  line-height: 1.5;
+}
+
+.app-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding: 0.75rem 1.25rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.app-header h1 {
+  font-size: 1.05rem;
+  margin: 0;
+}
+
+.app-version {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.app-main {
+  flex: 1;
+  display: grid;
+  gap: 1rem;
+  padding: 1.25rem;
+  align-content: start;
+  max-width: 60rem;
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.25rem;
+}
+
+.panel h2 {
+  font-size: 0.95rem;
+  margin: 0 0 0.5rem;
+}
+
+.status-ok {
+  color: var(--accent);
+  margin: 0;
+}
+
+.status-error {
+  color: var(--danger);
+  margin: 0;
+}

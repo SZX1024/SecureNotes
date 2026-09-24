@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023"],
+    // Runtime globals (D1Database, R2Bucket, ...) come from the generated
+    // worker-configuration.d.ts; this entry adds the `cloudflare:test` module
+    // used by the test suite.
+    "types": ["@cloudflare/vitest-pool-workers/types"]
+  },
+  "include": ["src", "test", "worker-configuration.d.ts", "vitest.config.ts"]
+}

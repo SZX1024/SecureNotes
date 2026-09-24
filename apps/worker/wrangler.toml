@@ -1,0 +1,37 @@
+#:schema node_modules/wrangler/config-schema.json
+name = "securenotes"
+main = "src/index.ts"
+# Pinned deliberately: never let a deploy pick up new runtime defaults silently.
+# Keep this <= the newest date supported by the OLDEST runtime in the toolchain:
+# @cloudflare/vitest-pool-workers pins miniflare 5.20260815.0-alpha (workerd
+# 1.20260815.1), which rejects anything newer than 2026-08-22, so a newer date
+# here makes the whole worker test suite fail to boot. Raise only with that pin.
+compatibility_date = "2026-08-22"
+workers_dev = true
+
+[dev]
+port = 8787
+
+[vars]
+ENVIRONMENT = "development"
+
+# Local development uses Miniflare's local D1/R2 emulation (.wrangler/state) and
+# needs no Cloudflare account. Before the first `wrangler deploy`, replace the
+# placeholder id below with the real id from `wrangler d1 create securenotes-db`.
+[[d1_databases]]
+binding = "DB"
+database_name = "securenotes-db"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "ATTACHMENTS"
+bucket_name = "securenotes-attachments"
+
+# Audit-log retention is exactly 30 days (requirements §5); the hourly sweep
+# that enforces it is implemented in P2.
+[triggers]
+crons = ["17 * * * *"]
+
+[observability]
+enabled = true

@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // WebWorker, not DOM: shared code runs in both a browser tab and workerd,
+    // so it gets TextEncoder/TextDecoder/crypto/fetch but deliberately has no
+    // access to `window` or `document`.
+    "lib": ["ES2023", "WebWorker"]
+  },
+  "include": ["src", "test"]
+}

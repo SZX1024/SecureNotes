@@ -1,0 +1,19 @@
+{
+  "name": "SecureNotes",
+  "short_name": "SecureNotes",
+  "description": "Personal, local-first, client-side-encrypted notes.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f4f4f5",
+  "theme_color": "#18181b",
+  "lang": "en",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
