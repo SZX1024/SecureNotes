@@ -6,7 +6,7 @@ import {
   type Bytes,
 } from "@securenotes/shared";
 
-import { ApiError } from "../api/client";
+import { ApiError, apiRequest } from "../api/client";
 import { attachmentMarkdown } from "../editor/attachments";
 
 /**
@@ -131,6 +131,52 @@ export async function uploadAttachment(input: AttachmentUploadInput): Promise<Up
     id: payload.data.attachment.id,
     markdown: attachmentMarkdown(payload.data.attachment.id, file.name),
   };
+}
+
+/**
+ * Links an attachment to a note, which is what raises its reference count (§12).
+ *
+ * Called when the reference is inserted, not when the upload finishes: an uploaded
+ * object that no note references would be deleted by the sweeper as an orphan.
+ */
+export async function linkNoteAttachment(noteId: string, attachmentId: string): Promise<void> {
+  await apiRequest(`/notes/${noteId}/attachments`, {
+    method: "POST",
+    body: { attachmentId },
+  });
+}
+
+/**
+ * Removes a reference; at zero references the server enqueues the object for deletion.
+ *
+ * The deletion is deliberately not performed here — removing a reference and destroying
+ * the ciphertext are different decisions, and the sweep is idempotent.
+ */
+export async function unlinkNoteAttachment(noteId: string, attachmentId: string): Promise<void> {
+  await apiRequest(`/notes/${noteId}/attachments/${attachmentId}`, { method: "DELETE" });
+}
+
+/**
+ * Brings the server's references in line with the note's text.
+ *
+ * The text is the authority: an attachment whose reference was deleted is unlinked, and
+ * one that appears is linked. Nothing happens for an id that is added and removed in the
+ * same edit, which is what `diffAttachmentRefs` already decides.
+ */
+export async function syncAttachmentLinks(
+  noteId: string,
+  added: readonly string[],
+  removed: readonly string[],
+): Promise<{ linked: number; unlinked: number }> {
+  for (const id of added) {
+    await linkNoteAttachment(noteId, id);
+  }
+  for (const id of removed) {
+    // Best effort per id: one stale reference must not prevent the rest from being
+    // cleaned up.
+    await unlinkNoteAttachment(noteId, id).catch(() => undefined);
+  }
+  return { linked: added.length, unlinked: removed.length };
 }
 
 /**

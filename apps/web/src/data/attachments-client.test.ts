@@ -199,3 +199,65 @@ describe("uploading", () => {
     ).rejects.toThrow();
   });
 });
+
+describe("reference counting (§12)", () => {
+  it("links and unlinks exactly the ids it is given", async () => {
+    const calls: Array<{ url: string; method: string }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        calls.push({ url: String(url), method: init.method ?? "GET" });
+        return new Response(JSON.stringify({ ok: true, data: {} }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }),
+    );
+
+    const { syncAttachmentLinks } = await import("./attachments-client");
+    const result = await syncAttachmentLinks("note-1", ["added-a"], ["gone-b"]);
+
+    expect(result).toEqual({ linked: 1, unlinked: 1 });
+    expect(calls).toEqual([
+      { url: "/api/v1/notes/note-1/attachments", method: "POST" },
+      { url: "/api/v1/notes/note-1/attachments/gone-b", method: "DELETE" },
+    ]);
+  });
+
+  it("keeps unlinking the rest when one reference is already gone", async () => {
+    // A stale reference must not stop the others from being cleaned up: the count is
+    // what decides whether an object is ever deleted.
+    let call = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        call += 1;
+        return call === 1
+          ? new Response(JSON.stringify({ ok: false, error: { code: "NOT_FOUND" } }), {
+              status: 404,
+            })
+          : new Response(JSON.stringify({ ok: true, data: {} }), {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            });
+      }),
+    );
+
+    const { syncAttachmentLinks } = await import("./attachments-client");
+    const result = await syncAttachmentLinks("note-1", [], ["missing", "present"]);
+
+    expect(result.unlinked).toBe(2);
+    expect(call).toBe(2);
+  });
+
+  it("does nothing when the text did not change", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { syncAttachmentLinks } = await import("./attachments-client");
+    const result = await syncAttachmentLinks("note-1", [], []);
+
+    expect(result).toEqual({ linked: 0, unlinked: 0 });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});

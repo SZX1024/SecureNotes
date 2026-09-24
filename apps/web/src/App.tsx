@@ -22,6 +22,8 @@ import { NoteSearchIndex, highlightSegments } from "./search";
 import { defaultEditorMode, loadEditorMode, saveEditorMode, type EditorMode } from "./editor/mode";
 import { decideDrop, decidePaste } from "./editor/paste";
 import { uploadAttachment } from "./data/attachments-client";
+import { syncAttachmentLinks } from "./data/attachments-client";
+import { ATTACHMENT_URL_PREFIX, attachmentRefsIn, diffAttachmentRefs } from "./editor/attachments";
 import {
   loadThemePreference,
   nextThemePreference,
@@ -91,6 +93,8 @@ export function App() {
   );
   const [richTextPreference, setRichTextPreference] = useState<"html" | "plain" | null>(null);
   const [pastePrompt, setPastePrompt] = useState<{ html: string; text: string } | null>(null);
+  /** The references the note had when it was opened, for the save-time diff. */
+  const [openedRefs, setOpenedRefs] = useState<string[]>([]);
   const [editorMode, setEditorMode] = useState<EditorMode>(() =>
     defaultEditorMode(
       typeof window === "undefined" ? 1024 : window.innerWidth,
@@ -251,6 +255,7 @@ export function App() {
       }
       setSelectedId(id);
       setDraft({ id, title: found.document.title, body: found.document.body });
+      setOpenedRefs(attachmentRefsIn(found.document.body));
       setRecent((current) => rememberOpened(current, id));
     },
     [notes],
@@ -268,6 +273,14 @@ export function App() {
     };
     await runRequest(async () => {
       await updateLocalNote(context, { id: draft.id, title: draft.title, body: draft.body });
+      // §12 reference counting: the text decides. An attachment whose reference was
+      // deleted loses its link, and the server enqueues it for deletion at zero.
+      const currentRefs = attachmentRefsIn(draft.body);
+      const { added, removed } = diffAttachmentRefs(openedRefs, currentRefs);
+      if (added.length > 0 || removed.length > 0) {
+        await syncAttachmentLinks(draft.id, added, removed);
+        setOpenedRefs(currentRefs);
+      }
       await refresh(db, account);
       setMessage("Saved locally and queued for sync.");
     });
@@ -309,6 +322,25 @@ export function App() {
    * reference is only inserted after the server has confirmed it stored the object — so a
    * failed upload leaves no reference pointing at nothing.
    */
+  /**
+   * Removes an attachment's reference from the note text.
+   *
+   * Only the text changes here: the unlink happens on save, through the same diff as any
+   * other edit, so there is one code path that decides reference counts.
+   */
+  const removeAttachmentReference = useCallback((id: string) => {
+    setDraft((current) => {
+      if (!current) {
+        return current;
+      }
+      const pattern = new RegExp(
+        `!\\[[^\\]]*\\]\\(${ATTACHMENT_URL_PREFIX}${id}/content\\)\\n?`,
+        "g",
+      );
+      return { ...current, body: current.body.replace(pattern, "") };
+    });
+  }, []);
+
   const uploadImages = useCallback(
     async (files: readonly File[]) => {
       if (!account || !draft) {
@@ -331,6 +363,7 @@ export function App() {
                 }
               : current,
           );
+          await syncAttachmentLinks(noteId, [uploaded.id], []);
           setMessage("Image encrypted and attached.");
         } catch (error) {
           setMessage(error instanceof Error ? error.message : "The upload failed.");
@@ -387,6 +420,14 @@ export function App() {
     },
     [uploadImages],
   );
+
+  /**
+   * The attachments this note references.
+   *
+   * Derived from the note's own text rather than a separate list, so the panel cannot
+   * disagree with what the note actually contains.
+   */
+  const draftAttachments = useMemo(() => (draft ? attachmentRefsIn(draft.body) : []), [draft]);
 
   const commands = useMemo<Command[]>(
     () =>
@@ -724,6 +765,31 @@ export function App() {
                   }
                 />
               </div>
+            )}
+            {draftAttachments.length > 0 && (
+              <section className="attachments" aria-label="Attachments">
+                <h2>Attachments ({draftAttachments.length})</h2>
+                <ul>
+                  {draftAttachments.map((id) => (
+                    <li key={id}>
+                      <a
+                        href={`${ATTACHMENT_URL_PREFIX}${id}/content`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {id.slice(0, 8)}…
+                      </a>
+                      <button type="button" onClick={() => removeAttachmentReference(id)}>
+                        Remove
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+                <p className="muted">
+                  Removing a reference schedules the encrypted object for deletion once nothing else
+                  uses it.
+                </p>
+              </section>
             )}
             <footer>
               <button type="button" className="primary" onClick={() => void saveDraft()}>
