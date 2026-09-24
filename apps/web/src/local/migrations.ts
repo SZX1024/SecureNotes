@@ -124,6 +124,14 @@ export const UPGRADES: Readonly<Record<number, RowTransform>> = {
     }
     return row;
   },
+  // 2 -> 3: notes gain pinning and manual order. Existing notes are not pinned
+  // and keep insertion order, which is what the defaults express.
+  3: (table, row) => {
+    if (table === "notes") {
+      return { pinned: false, sortOrder: 0, ...row };
+    }
+    return row;
+  },
 };
 
 /**
@@ -220,12 +228,19 @@ export async function openAppDatabase(
       await target.table(table).clear();
     }
 
-    const copied: Record<string, number> = {};
+    // Every applicable step is composed into one transformation and applied in a
+    // single pass. Copying once per version would let a later pass write a row
+    // that a previous pass had already enriched, silently dropping its defaults.
+    const steps: RowTransform[] = [];
     for (let version = fromVersion + 1; version <= targetVersion; version += 1) {
-      const transform = UPGRADES[version] ?? ((_table, row) => row);
-      for (const table of copiedTables) {
-        copied[table] = (copied[table] ?? 0) + (await copyTable(source, target, table, transform));
-      }
+      steps.push(UPGRADES[version] ?? ((_table, row) => row));
+    }
+    const transform: RowTransform = (table, row) =>
+      steps.reduce((current, step) => step(table, current), row);
+
+    const copied: Record<string, number> = {};
+    for (const table of copiedTables) {
+      copied[table] = await copyTable(source, target, table, transform);
     }
 
     // Verification: the new database must hold at least everything the old one

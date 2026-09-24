@@ -73,6 +73,8 @@ export async function createLocalNote(
     revision,
     payload,
     deletedAt: null,
+    pinned: false,
+    sortOrder: 0,
     createdAt: now,
     updatedAt: now,
     syncedAt: null,

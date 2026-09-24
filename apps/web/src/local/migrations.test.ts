@@ -59,6 +59,8 @@ async function seedVersion1Database(name: string): Promise<void> {
         ciphertext: "ct",
       },
       deletedAt: null,
+      pinned: false,
+      sortOrder: 0,
       createdAt: 1,
       updatedAt: 2,
       syncedAt: null,
@@ -75,6 +77,8 @@ async function seedVersion1Database(name: string): Promise<void> {
         ciphertext: "ct",
       },
       deletedAt: null,
+      pinned: false,
+      sortOrder: 0,
       createdAt: 3,
       updatedAt: 4,
       syncedAt: 4,
@@ -109,9 +113,9 @@ let sequence = 0;
  * file and an open connection blocks deletion, so sharing a fixed name would let
  * one failure corrupt every later test.
  */
-function freshNames(): { v1: string; v2: string } {
+function freshNames(): { v1: string; target: string } {
   const suffix = `case-${(sequence += 1)}`;
-  return { v1: `${suffix}-v1`, v2: `${suffix}-v2` };
+  return { v1: `${suffix}-v1`, target: `${suffix}-v${SCHEMA_VERSION}` };
 }
 
 /** Storage pointing at a given database, so the migration works on that one. */
@@ -145,7 +149,7 @@ describe("local schema migration (§21)", () => {
     expect(attachment?.cachedAt).toBeNull();
 
     // And the pointer now names the new database.
-    expect(activeDatabaseName(storage)).toBe(names.v2);
+    expect(activeDatabaseName(storage)).toBe(names.target);
     expect(activeSchemaVersion(storage)).toBe(SCHEMA_VERSION);
 
     // The previous copy is gone only after the switch succeeded.
@@ -199,6 +203,8 @@ describe("local schema migration (§21)", () => {
         ciphertext: "ct",
       },
       deletedAt: null,
+      pinned: false,
+      sortOrder: 0,
       createdAt: 1,
       updatedAt: 1,
       syncedAt: null,
@@ -218,7 +224,7 @@ describe("local schema migration (§21)", () => {
     await seedVersion1Database(names.v1);
 
     // A previous attempt left a partially populated target behind.
-    const stale = openDatabase(names.v2);
+    const stale = openDatabase(names.target);
     await stale.open();
     await stale.notes.put({
       id: "ghost",
@@ -232,6 +238,8 @@ describe("local schema migration (§21)", () => {
         ciphertext: "ct",
       },
       deletedAt: null,
+      pinned: false,
+      sortOrder: 0,
       createdAt: 0,
       updatedAt: 0,
       syncedAt: null,
@@ -247,11 +255,11 @@ describe("local schema migration (§21)", () => {
   });
 
   it("reads an older version without modifying the stored database", async () => {
-    const name = freshNames().v2;
+    const name = freshNames().target;
     const current = openDatabase(name);
     await current.open();
     await current.deviceKeys.put({ id: "device", key: await makeDeviceKey(), createdAt: 1 });
-    expect(current.verno).toBe(2);
+    expect(current.verno).toBe(SCHEMA_VERSION);
     current.close();
 
     // Declaring only version 1 must expose the older view and leave the stored
@@ -262,7 +270,7 @@ describe("local schema migration (§21)", () => {
     expect(legacyView.tables.map((table) => table.name)).not.toContain("deviceKeys");
     legacyView.close();
 
-    expect(await storedDatabaseVersion(name)).toBe(2);
+    expect(await storedDatabaseVersion(name)).toBe(SCHEMA_VERSION);
     const reopened = openDatabase(name);
     await reopened.open();
     expect(await reopened.deviceKeys.count()).toBe(1);
@@ -280,7 +288,7 @@ describe("local schema migration (§21)", () => {
     expect(report.migrated).toBe(false);
     expect(report.fromVersion).toBe(0);
     expect(db.verno).toBe(SCHEMA_VERSION);
-    expect(activeDatabaseName(storage)).toBe(names.v2);
+    expect(activeDatabaseName(storage)).toBe(names.target);
     db.close();
   });
 

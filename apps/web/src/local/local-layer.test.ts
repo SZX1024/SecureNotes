@@ -304,6 +304,8 @@ describe("cache eviction (§8)", () => {
         ciphertext: "ct",
       },
       deletedAt: null,
+      pinned: false,
+      sortOrder: 0,
       createdAt: 1,
       updatedAt: 1,
       syncedAt: 1,

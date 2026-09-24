@@ -22,6 +22,9 @@ export interface LocalNote {
   /** The encrypted Markdown payload; the title lives inside it. */
   payload: CryptoEnvelope;
   deletedAt: number | null;
+  /** §10: pinning and manual drag order are per-note organisation. */
+  pinned: boolean;
+  sortOrder: number;
   createdAt: number;
   updatedAt: number;
   /** When the server last confirmed this revision; null means never synced. */
@@ -137,6 +140,23 @@ export const SCHEMA_DEFINITIONS: readonly SchemaDefinition[] = [
     // Adds the device key store (§7) and indexes the queue by time so the oldest
     // pending change can be found without a full scan.
     version: 2,
+    stores: {
+      notes: "id, folderId, updatedAt, deletedAt, syncedAt",
+      folders: "id, parentId, updatedAt, syncedAt",
+      tags: "id, updatedAt, syncedAt",
+      noteTags: "[noteId+tagId], noteId, tagId",
+      attachments: "id, syncedAt, cachedAt",
+      syncQueue: "++id, objectId, queuedAt, nextAttemptAt",
+      keyMaterial: "id",
+      deviceKeys: "id",
+      meta: "key",
+    },
+  },
+  {
+    // Version 3 adds the organisation fields §10 needs on a note (pinning and
+    // manual order). The indexes are unchanged: this is a row-shape change, and
+    // the migration supplies the defaults for existing rows.
+    version: 3,
     stores: {
       notes: "id, folderId, updatedAt, deletedAt, syncedAt",
       folders: "id, parentId, updatedAt, syncedAt",
