@@ -136,7 +136,7 @@ describe("hostile Markdown produces no active content (§31)", () => {
     for (const vector of vectors) {
       const html = renderMarkdown(vector);
       expect(containsActiveContent(html), vector).toBe(false);
-      expect(html, vector).not.toMatch(/<script|<iframe|onerror|onload/i);
+      expect(html, vector).not.toMatch(/<script|onerror|onload/i);
     }
   });
 
@@ -157,6 +157,26 @@ describe("hostile Markdown produces no active content (§31)", () => {
     const html = renderMarkdown("![x](http://evil.example/track.png)\n");
 
     expect(html).not.toContain("http://evil.example");
+  });
+});
+
+describe("embeds are isolated rather than removed (§12)", () => {
+  it("keeps an HTTPS iframe with the enforced sandbox", () => {
+    const html = renderMarkdown('<iframe src="https://player.example/v"></iframe>');
+
+    // §12 permits arbitrary HTTPS embeds, so the element stays — the sandbox is what stops
+    // it reaching this origin.
+    expect(html).toContain("<iframe");
+    expect(html).toContain("sandbox=");
+    expect(html).not.toContain("allow-same-origin");
+    expect(html).toContain('referrerpolicy="no-referrer"');
+    expect(containsActiveContent(html)).toBe(false);
+  });
+
+  it("removes an embed that is not HTTPS", () => {
+    expect(renderMarkdown('<iframe src="http://player.example/v"></iframe>')).not.toContain(
+      "<iframe",
+    );
   });
 });
 

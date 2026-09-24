@@ -901,3 +901,33 @@ worker 日志给出确证：`POST /api/v1/attachments → 401 Unauthorized`（4 
    （`katex` 标记 5 处），但 jsdom 无布局引擎，**我无法确认视觉呈现**（例如是否居中成块）。
    需要你在浏览器里再看一次；若仍有问题，请把 Preview 里那一行的**实际外观**（或 Elements 里的
    片段）给我。
+
+### 20.4 iframe / 视频嵌入：隔离策略已接进管线（本批）
+
+§12 要求「任意 HTTPS iframe/video 可用，但必须与应用权限隔离」，而我此前只写了
+`sanitizeEmbed` 的策略函数、**没有接进 Markdown 管线** —— `FORBIDDEN_TAGS` 里含 `iframe`，
+所以笔记里的嵌入**被直接删除**（用户报告的「U 管」不成功就是这个）。
+
+现在：`iframe` 与 `video` 进入允许列表，但通过两条 hook 强制执行策略：
+
+- **仅 HTTPS**：否则**删除元素**（不是留一个空框 —— 空框仍是用户没要求的框）。
+- **权限只由策略决定**：笔记里写的 `sandbox`/`allow`/`referrerpolicy` 一律**丢弃后重设**，
+  绝不合并。`sandbox` 含 `allow-scripts` 但**永不含 `allow-same-origin`**，`allow=""`，
+  `referrerpolicy="no-referrer"`，`loading="lazy"`。
+- 只允许 9 个属性（`src`/`sandbox`/`referrerpolicy`/`allow`/`loading`/`width`/`height`/`title`/`class`）。
+- `video` 无 sandbox，靠「仅 HTTPS + **禁止子元素**（`source`/`track` 仍在禁止列表，否则它们是
+  绕过属性检查命名 URL 的第二条路）+ **无 autoplay**」保护。
+
+#### 我自己的测试抓到的一个安全缺陷
+
+第一版把策略属性写在 `uponSanitizeElement` 里。**DOMPurify 在该 hook 之后才过滤属性**，
+而 `sandbox` 不在允许属性列表中 —— 结果是**iframe 被保留下来却没有 sandbox**，
+即「看似允许、实则未隔离」。测试断言 `sandbox` 存在时立刻暴露。
+现在：元素 hook **只判断能否存在**，策略属性统一在 `afterSanitizeAttributes` 中设置（过滤之后）。
+
+**`containsActiveContent` 语义随之修正**：iframe 本身不再等于「活动内容」（§12 允许），
+但**缺少 sandbox 或含 `allow-same-origin` 的 iframe 等于活动内容** ✓。
+
+测试从「iframe 一律删除」改为断言**隔离**：HTTPS 保留且 `sandbox` 正确、笔记授予的权限被丢弃、
+非 HTTPS（`http:`/`javascript:`/`data:`/协议相对）被删除、video 保留 `controls` 但无 `autoplay`
+无子元素、`object`/`embed`/`applet` 仍被删除。

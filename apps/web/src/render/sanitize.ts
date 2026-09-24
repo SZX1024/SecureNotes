@@ -73,6 +73,11 @@ const ALLOWED_TAGS = [
   "ruby",
   "rt",
   "rp",
+  // §12 permits arbitrary HTTPS embeds. They pass through a narrow policy enforced by the
+  // hooks below: HTTPS only, a sandbox without `allow-same-origin`, no permissions — so an
+  // embed cannot reach this origin's DOM, storage or keys.
+  "iframe",
+  "video",
   "input", // task lists: type=checkbox only, enforced by a hook
   // SVG. The children have to be named too: DOMPurify's allowlist is the gate, and
   // a hook can only restrict what passed it — an unlisted `<rect>` is dropped
@@ -182,7 +187,6 @@ const ALLOWED_ATTR = [
 const FORBIDDEN_TAGS = [
   "script",
   "style",
-  "iframe",
   "frame",
   "frameset",
   "object",
@@ -211,7 +215,6 @@ const FORBIDDEN_TAGS = [
   "math",
   "foreignObject",
   "audio",
-  "video",
   "track",
   "source",
   "marquee",
@@ -405,6 +408,49 @@ function installHooks(): void {
     }
   });
 
+  // The element hook only decides whether an embed may exist at all. Setting attributes
+  // here would be wrong: DOMPurify filters attributes *after* this hook, so an attribute
+  // added here that is not on the allowlist is removed — which silently produced a frame
+  // with no sandbox.
+  DOMPurify.addHook("uponSanitizeElement", (node, data) => {
+    const tag = (data.tagName ?? "").toLowerCase();
+    if (tag !== "iframe" && tag !== "video") {
+      return;
+    }
+    const url = (node as Element).getAttribute("src") ?? "";
+    const policy = tag === "iframe" ? sanitizeEmbedAttributes(url) : sanitizeVideoAttributes(url);
+    if (!policy) {
+      // Not HTTPS: removed rather than emptied, because an empty frame is still a frame the
+      // reader did not ask for.
+      (node as Element).remove();
+    }
+  });
+
+  // Applied after filtering, so the policy's attributes survive and everything the note
+  // asked for is discarded rather than merged.
+  DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+    const tag = node.nodeName.toLowerCase();
+    if (tag === "iframe" || tag === "video") {
+      const element = node as Element;
+      const policy =
+        tag === "iframe"
+          ? sanitizeEmbedAttributes(element.getAttribute("src") ?? "")
+          : sanitizeVideoAttributes(element.getAttribute("src") ?? "");
+      if (!policy) {
+        element.remove();
+        return;
+      }
+      for (const attribute of [...element.attributes]) {
+        if (!EMBED_ATTRIBUTES.includes(attribute.name.toLowerCase())) {
+          element.removeAttribute(attribute.name);
+        }
+      }
+      for (const [name, value] of Object.entries(policy)) {
+        element.setAttribute(name, value);
+      }
+    }
+  });
+
   DOMPurify.addHook("afterSanitizeAttributes", (node) => {
     if (node.nodeName.toLowerCase() !== "a") {
       return;
@@ -548,6 +594,34 @@ export function sanitizeSvg(svg: string): string {
  * `allow` permissions means an embed cannot read this origin's DOM, storage or
  * session, and cannot see which note it sits in.
  */
+/** The only attributes an embed may carry once the policy has been applied. */
+const EMBED_ATTRIBUTES = [
+  "src",
+  "sandbox",
+  "referrerpolicy",
+  "allow",
+  "loading",
+  "width",
+  "height",
+  "title",
+  "class",
+];
+
+/**
+ * The attributes a `<video>` may carry (§12 names "iframe/video embeds").
+ *
+ * A video plays media rather than running a document, so it needs no sandbox; what protects
+ * this origin is that the source must be HTTPS, that no children are allowed (so a
+ * `<source>` element cannot name a URL the attribute check never saw), and that autoplay is
+ * absent — a note must not start playing audio the reader did not ask for.
+ */
+export function sanitizeVideoAttributes(url: string): Record<string, string> | null {
+  if (!isSafeEmbedUrl(url)) {
+    return null;
+  }
+  return { src: url, controls: "", preload: "metadata" };
+}
+
 export function sanitizeEmbedAttributes(url: string): Record<string, string> | null {
   if (!isSafeEmbedUrl(url)) {
     return null;
@@ -583,7 +657,14 @@ export function containsActiveContent(html: string): boolean {
   const container = document.createElement("div");
   container.innerHTML = html;
   return (
-    container.querySelector("script, iframe, object, embed, foreignObject") !== null ||
+    // An embed is not active content by itself — §12 allows it — but one that escaped the
+    // policy is: a missing sandbox, or `allow-same-origin`, would place it in this origin.
+    [...container.querySelectorAll("iframe")].some(
+      (frame) =>
+        !(frame.getAttribute("sandbox") ?? "").includes("allow-scripts") ||
+        (frame.getAttribute("sandbox") ?? "").includes("allow-same-origin"),
+    ) ||
+    container.querySelector("script, object, embed, foreignObject") !== null ||
     [...container.querySelectorAll("*")].some((element) =>
       [...element.attributes].some(
         (attribute) =>

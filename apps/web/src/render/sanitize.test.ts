@@ -107,12 +107,74 @@ describe("HTML sanitisation (§12)", () => {
     expect(clean).toContain('type="checkbox"');
   });
 
-  it("drops embeds, objects and other active containers", () => {
+  it("keeps an HTTPS embed but isolates it (§12)", () => {
+    const clean = sanitizeHtml('<iframe src="https://player.example/v/abc"></iframe>');
+
+    const container = document.createElement("div");
+    container.innerHTML = clean;
+    const frame = container.querySelector("iframe");
+
+    expect(frame).not.toBeNull();
+    // The protection is the sandbox, not the hostname: without same-origin the embed sits in
+    // an opaque origin and cannot reach this origin's DOM, storage or keys.
+    expect(frame!.getAttribute("sandbox")).toBe(EMBED_SANDBOX);
+    expect(frame!.getAttribute("sandbox")).not.toContain("allow-same-origin");
+    expect(frame!.getAttribute("referrerpolicy")).toBe("no-referrer");
+    expect(containsActiveContent(clean)).toBe(false);
+  });
+
+  it("discards permissions a note tries to grant an embed", () => {
     const clean = sanitizeHtml(
-      '<iframe src="https://evil.example"></iframe><object data="x"></object><embed src="y"><video src="z"></video>',
+      '<iframe src="https://player.example/v" sandbox="allow-same-origin allow-scripts" allow="camera; microphone" referrerpolicy="unsafe-url"></iframe>',
     );
 
-    expect(clean).not.toMatch(/iframe|object|embed|video/i);
+    const container = document.createElement("div");
+    container.innerHTML = clean;
+    const frame = container.querySelector("iframe")!;
+
+    expect(frame.getAttribute("sandbox")).toBe(EMBED_SANDBOX);
+    expect(frame.getAttribute("allow")).toBe("");
+    expect(frame.getAttribute("referrerpolicy")).toBe("no-referrer");
+  });
+
+  it("removes an embed that is not HTTPS", () => {
+    for (const url of [
+      "http://player.example/v",
+      "javascript:alert(1)",
+      "data:text/html,x",
+      "//player.example/v",
+    ]) {
+      expect(sanitizeHtml(`<iframe src="${url}"></iframe>`), url).not.toContain("<iframe");
+    }
+  });
+
+  it("keeps an HTTPS video and forbids its children", () => {
+    const clean = sanitizeHtml(
+      '<video src="https://media.example/v.mp4" autoplay controls><source src="https://evil.example/x.mp4"></video>',
+    );
+
+    const container = document.createElement("div");
+    container.innerHTML = clean;
+    const video = container.querySelector("video")!;
+
+    expect(video.getAttribute("src")).toBe("https://media.example/v.mp4");
+    expect(video.hasAttribute("controls")).toBe(true);
+    // No autoplay, and no child that could name another URL.
+    expect(video.hasAttribute("autoplay")).toBe(false);
+    expect(container.querySelector("source")).toBeNull();
+    expect(clean).not.toContain("evil.example");
+  });
+
+  it("removes a video that is not HTTPS", () => {
+    expect(sanitizeHtml('<video src="http://media.example/v.mp4"></video>')).not.toContain(
+      "<video",
+    );
+  });
+
+  it("still drops objects and other active containers", () => {
+    expect(sanitizeHtml('<object data="x"></object><embed src="y"><applet></applet>')).not.toMatch(
+      /object|embed|applet/i,
+    );
   });
 
   it("survives the classic mutation and namespace bypasses", () => {
