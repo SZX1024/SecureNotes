@@ -14,6 +14,11 @@ port = 8787
 
 [vars]
 ENVIRONMENT = "development"
+# Origins allowed to call the API. The browser talks to its own origin and Vite
+# proxies /api to this worker, so in development the Vite origins must be listed
+# explicitly: the worker sees the browser's Origin, not its own.
+# Production must list only the deployed origin, e.g. "https://notes.example.com".
+ALLOWED_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173"
 
 # Local development uses Miniflare's local D1/R2 emulation (.wrangler/state) and
 # needs no Cloudflare account. Before the first `wrangler deploy`, replace the

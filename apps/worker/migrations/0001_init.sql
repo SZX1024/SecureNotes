@@ -29,6 +29,12 @@
 -- Account (§3). Exactly one application account exists; the row is created by
 -- first-run initialization. `username` is immutable and is a KDF input, so it
 -- is stored byte-exact and is never rewritten.
+--
+-- The wrapped DEK is NULL until the client finishes key setup. The DEK is
+-- generated in the browser — the server never holds it — so enrolment creates
+-- the account first and the client uploads the KEK-wrapped DEK afterwards
+-- (requirements §6, ADR-002). Any operation that needs data keys must refuse an
+-- account whose key material is still missing rather than assume it exists.
 -- ---------------------------------------------------------------------------
 CREATE TABLE users (
   id TEXT PRIMARY KEY,
@@ -38,14 +44,14 @@ CREATE TABLE users (
   kdf_salt TEXT NOT NULL,
   key_version INTEGER NOT NULL DEFAULT 1 CHECK (key_version >= 1),
   crypto_version INTEGER NOT NULL DEFAULT 1 CHECK (crypto_version >= 1),
-  -- DEK wrapped by the KEK (§6). Opaque to the server.
-  wrapped_dek_iv TEXT NOT NULL,
-  wrapped_dek_ciphertext TEXT NOT NULL,
+  wrapped_dek_iv TEXT,
+  wrapped_dek_ciphertext TEXT,
   -- Progressive login backoff with a cap; never a permanent lockout (§3).
   failed_auth_count INTEGER NOT NULL DEFAULT 0 CHECK (failed_auth_count >= 0),
   auth_backoff_until INTEGER,
   created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  CHECK ((wrapped_dek_iv IS NULL) = (wrapped_dek_ciphertext IS NULL))
 );
 
 -- ---------------------------------------------------------------------------
@@ -83,15 +89,19 @@ CREATE TABLE recovery_codes (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   code_hash TEXT NOT NULL UNIQUE CHECK (length(code_hash) = 64),
-  -- Per-code HKDF salt for the recovery KEK (§6 "Recovery key path").
+  -- Per-code HKDF salt for the recovery KEK (§6 "Recovery key path"). Generated
+  -- by the server at enrolment; it is not secret.
   kdf_salt TEXT NOT NULL,
-  wrapped_dek_iv TEXT NOT NULL,
-  wrapped_dek_ciphertext TEXT NOT NULL,
-  crypto_version INTEGER NOT NULL CHECK (crypto_version >= 1),
-  key_version INTEGER NOT NULL CHECK (key_version >= 1),
+  -- NULL until the client uploads the recovery wrapping of the DEK (P3), for
+  -- the same reason the account's wrapped DEK starts NULL.
+  wrapped_dek_iv TEXT,
+  wrapped_dek_ciphertext TEXT,
+  crypto_version INTEGER CHECK (crypto_version >= 1),
+  key_version INTEGER CHECK (key_version >= 1),
   -- NULL until the code is spent. Single use: a spent code is never revived.
   used_at INTEGER,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  CHECK ((wrapped_dek_iv IS NULL) = (wrapped_dek_ciphertext IS NULL))
 );
 
 CREATE INDEX recovery_codes_user_idx ON recovery_codes (user_id, used_at);

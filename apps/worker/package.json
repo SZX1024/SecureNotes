@@ -13,7 +13,8 @@
   },
   "dependencies": {
     "@securenotes/shared": "workspace:*",
-    "hono": "^4.13.9"
+    "hono": "^4.13.9",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.22.0",

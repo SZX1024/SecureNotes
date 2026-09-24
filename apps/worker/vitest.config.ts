@@ -1,6 +1,10 @@
 import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-pool-workers";
 import { defineConfig } from "vitest/config";
 
+/** Fixed base64 256-bit keys, valid only inside the test pool. */
+const TEST_SECRET_WRAP_KEY = "dGVzdC1zZWNyZXQtd3JhcC1rZXktMzItYnl0ZXMhISE=";
+const TEST_CSRF_SIGNING_KEY = "dGVzdC1jc3JmLXNpZ25pbmcta2V5LTMyLWJ5dGVzISE=";
+
 /**
  * Tests run inside workerd via the Workers pool, using the real wrangler.toml
  * bindings (local D1 + R2). In `@cloudflare/vitest-pool-workers` 0.22 the pool
@@ -18,6 +22,11 @@ export default defineConfig(async () => ({
       miniflare: {
         bindings: {
           TEST_MIGRATIONS: await readD1Migrations("./migrations"),
+          // Deterministic test-only secrets. Production values come from
+          // `wrangler secret put`; these never reach a deployed worker and are
+          // deliberately not the values in `.dev.vars.example`.
+          SECRET_WRAP_KEY: TEST_SECRET_WRAP_KEY,
+          CSRF_SIGNING_KEY: TEST_CSRF_SIGNING_KEY,
         },
       },
     }),

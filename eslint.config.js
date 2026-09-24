@@ -11,6 +11,8 @@ export default tseslint.config(
       "**/node_modules/**",
       "**/.wrangler/**",
       "**/.pnpm-store/**",
+      // scratch HOME used when the machine's real $HOME is not writable
+      "**/.sandbox-home/**",
       "**/coverage/**",
       "**/playwright-report/**",
       "**/test-results/**",

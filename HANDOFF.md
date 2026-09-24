@@ -322,3 +322,77 @@ Hono 的 `app.route()` 会把子应用路由**摊平**进父路由表，匹配�
 - `docs/schema.md` 的「Deferred to later phases」列出 P3/P7 需要的新迁移；**不得修改已应用的 `0001_init.sql`**。
 - P2 开工即会用到的表：`users`（`failed_auth_count` / `auth_backoff_until`）、`totp_config`（`last_used_step`）、`sessions`、`recovery_codes`、`audit_logs`、`rate_limits`。
 - 注意 §11.2：跑任何 `wrangler dev` / `d1 execute` 前先设 `HOME="$PWD/.sandbox-home"`。
+
+## 13. P2 完成记录（认证域，本次）
+
+### 13.1 交付物
+
+| 文件                                                                | 内容                                                                                                                           |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `packages/shared/src/policy.ts`                                     | 所有政策常量唯一真源：40 分钟滑动/30 天记住设备、会话上限 5、10 个 32 字符恢复码、TOTP 参数、审计 30 天、限流阈值与退避基数    |
+| `apps/worker/src/lib/base32.ts`、`lib/totp.ts`                      | RFC 4648 base32（严格，含非零尾位拒绝）+ RFC 6238 TOTP（动态截断、±1 步漂移、**已用步号拒绝重放**）                            |
+| `apps/worker/src/lib/crypto.ts`、`lib/secret-box.ts`                | WebCrypto 助手；`deriveWorkerKey` 从单一根密钥按用途 HKDF 派生（`totp-secret` / `audit-detail`），AES-256-GCM 封装，失败即关闭 |
+| `apps/worker/src/lib/client-meta.ts`                                | IP 截断（IPv4 /24、IPv6 /48）与浏览器/OS 类别（绝不保存完整 UA）                                                               |
+| `apps/worker/src/lib/api-error.ts`、`lib/http.ts`、`lib/cookies.ts` | `ApiError`（diagnostic 与 message 分离）；`readSetCookieHeaders`；显式把 Cookie 附到返回的 Response 上                         |
+| `apps/worker/src/middleware/guards.ts`                              | Origin/Referer 严格校验、`application/json` 强校验、正文大小上限（不信任 `Content-Length`）、Zod 解析                          |
+| `apps/worker/src/middleware/session.ts`                             | 会话装载（滑动续期 + 写阈值）、`requireSession`、`requireCsrf`                                                                 |
+| `apps/worker/src/services/account.ts`                               | 首运行初始化、TOTP 登录校验、恢复码单次核销、TOTP Secret 读取（ADR-002）                                                       |
+| `apps/worker/src/services/sessions.ts`                              | 会话创建（5 上限 + 淘汰最久未活动）、滑动/绝对过期、设备列表/改名/单个撤销/全部撤销、CSRF token 派生与校验                     |
+| `apps/worker/src/services/audit.ts`                                 | 审计写入（detail 加密）、30 天清理、限流表清理                                                                                 |
+| `apps/worker/src/services/rate-limit.ts`                            | IP/账号/端点三类窗口计数 + 指数退避（1s→2s→…→60s 上限，无永久锁定）                                                            |
+| `apps/worker/src/routes/{auth,sessions,audit}.ts`                   | 全部 P2 端点                                                                                                                   |
+| `apps/worker/src/index.ts`                                          | Cron：审计 30 天清理 + 限流过期清理（`waitUntil`，失败只记录不抛）                                                             |
+| `apps/worker/test/support.ts`                                       | 集成测试支撑（`SELF.fetch`、Cookie 罐、限流/重放守卫重置——**每个测试前必须重置**）                                             |
+| `apps/worker/test/{auth,sessions,security,base32,totp,lib}.test.ts` | 90 个新测试                                                                                                                    |
+
+### 13.2 本次发现并修掉的**真实缺陷**（很重要，务必记住）
+
+1. **`setCookie(c, …)` + 返回自建 `Response` 会静默丢失 Cookie**。P0 的 `jsonOk()` 返回裸 `Response`，于是登录/登出/撤销的 Cookie 全部丢失。已改为把 Cookie **显式附加到返回的 Response**（`applySessionCookies` / `applyClearedSessionCookies`）。**新增任何返回自建 Response 且需要写 Cookie 的路由，都必须用这两个函数。**
+2. **`securityHeaders()` 用 `new Headers(response.headers)` 重建响应会丢掉 `Set-Cookie`**（Header 迭代不含它）。已显式复制（`readSetCookieHeaders`）。
+3. **`getAccount()` 原按 `created_at ASC` 取第一行**，一个更小的时间戳就能顶掉真实账户。已改为按 `rowid ASC`（插入顺序，不可伪造）。
+4. **`ApiError` 曾把 Error message 当 diagnostic 回传**，会泄露内部字符串。已分离 `message` 与 `diagnostic`。
+5. **`0001_init.sql` 的 `NOT NULL` 与客户端持有 DEK 的设计冲突**：DEK 由浏览器生成，服务端永不持有，因此新账户在客户端上传包裹前没有密钥material。已把 `users.wrapped_dek_*` 与 `recovery_codes.wrapped_dek_*`/`crypto_version`/`key_version` 改为可空，并加 `CHECK`（两者同时存在或同时缺失）。**这是对已提交迁移的修改**，理由是尚未部署、无其他使用者；本地状态已删除并重新验证（`37 commands executed successfully`）。
+6. 测试侧教训：这是**按文件**隔离存储（不是按测试），因此同一文件内不同测试会互相污染限流桶与账户退避状态 → `beforeEach(resetRateLimits)`；`loginOnce()` 会先清 TOTP 步号守卫。
+
+### 13.3 新增配置（P3+ 必须知道）
+
+- Worker secrets：`SECRET_WRAP_KEY`、`CSRF_SIGNING_KEY`（base64 32 字节）。本地放 `.dev.vars`（已 gitignore），生产用 `wrangler secret put`。测试用 `vitest.config.ts` 里的固定测试值。
+- 新 `[vars] ALLOWED_ORIGINS`：开发为 Vite 两个源；**生产必须只列部署源**，否则 Origin 校验会全部拒绝。
+- 端点写法：不安全方法**必须**带允许的 `Origin`（无 Origin 直接 403），并带 `x-csrf-token`（取自 `csrf` Cookie）。
+
+### 13.4 待后续阶段
+
+- **P3**：客户端信封加密/KEK-DEK 派生；`/auth/setup` 后需新增「上传包裹后的 DEK」端点与 TOTP 换绑状态机（含一次性 nonce 表，新迁移）；`keyMaterialPresent: false` 表示尚未上传。
+- **P4**：客户端在收到任意 401（`UNAUTHENTICATED`）时删除本地缓存与包裹密钥并回到认证；`GET /api/v1/auth/session` 返回 200 + `authenticated:false` 便于启动探测。
+- **P2 已实现审计写入但设备列表未做分页**；审计查询支持 `limit`/`before`。
+
+### 13.5 本次新增的配置校验与两个环境注意点
+
+- **缺 secret 曾经只会得到一个难懂的 500**（AES-GCM 内部崩），现已在 API 中间件最前面加
+  `findConfigProblem(env)`（`src/lib/config.ts`）：缺 `SECRET_WRAP_KEY` / `CSRF_SIGNING_KEY` /
+  `ALLOWED_ORIGINS`、或密钥不是 32 字节 base64 时，返回 500 并在 development 用 diagnostic
+  **点名缺哪个绑定**（绝不回显密钥值）。有测试覆盖。
+- **本机 8787 端口已被另一个进程占用**（不是本仓库：它返回 `ORIGIN_REQUIRED`/`AUTH_REQUIRED`
+  这种不属于我们的错误格式）。`wrangler dev` 会以 `Address already in use` 失败。
+  **不要杀掉那个进程**（可能属于用户的其他项目）；改用 `wrangler dev --port 8791` 之类的空闲端口即可。
+  **重要**：如果 8787 上已有别的服务，`curl 127.0.0.1:8787` 拿到的是**别人的响应**，
+  不要据此判断本项目的行为。
+- 本地已生成 `apps/worker/.dev.vars`（随机 32 字节密钥，已 gitignore）。**本地 D1 状态已清空**，
+  下次 `wrangler dev` 会回到首运行初始化；首次 setup 返回的 10 个恢复码与 TOTP Secret **只显示一次**。
+
+### 13.6 P2 端到端实测（真实 HTTP，非测试桩）
+
+在 `wrangler dev`（端口 8791）上用真实 TOTP 码跑通：
+
+```
+setup            → 200，10 个恢复码
+login            → 200，2 个 Set-Cookie（session + csrf），totpSecret 下发，keyMaterialPresent=false
+GET /sessions    → 200，1 个会话且 current 标记正确
+logout 无 CSRF   → 403 CSRF_FAILED
+logout 带 CSRF   → 200，2 个 Cookie 被清除（Max-Age=0）
+登出后 /sessions → 401 UNAUTHENTICATED
+```
+
+这一步专门验证了 13.2 第 1 条的 Cookie 修复在真实运行时的确生效（这是测试桩**无法**覆盖的失败模式：
+`SELF.fetch` 与真实 `wrangler dev` 在 Cookie 头重建路径上行为一致，但只有真实链路能证明最终
+客户端确实收到 `Set-Cookie`）。

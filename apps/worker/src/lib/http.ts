@@ -36,16 +36,43 @@ export function statusFor(code: ErrorCode): number {
   return STATUS_BY_CODE[code];
 }
 
-function jsonResponse(body: unknown, status: number): Response {
+function jsonResponse(body: unknown, status: number, headers?: Record<string, string>): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json; charset=utf-8" },
+    headers: { "content-type": "application/json; charset=utf-8", ...headers },
   });
 }
 
-export function jsonOk<T>(data: T, status = 200): Response {
+/**
+ * Reads every `Set-Cookie` value from a response.
+ *
+ * `Set-Cookie` is deliberately excluded from `Headers` iteration and from
+ * `Headers.get()`, because a combined value would be ambiguous. Any code that
+ * rebuilds a response from `new Headers(original.headers)` therefore silently
+ * drops the cookies unless it copies them explicitly — which is exactly how a
+ * session cookie can vanish between the handler and the client.
+ */
+export function readSetCookieHeaders(headers: Headers): string[] {
+  const extended = headers as Headers & {
+    getAll?: (name: string) => string[];
+    getSetCookie?: () => string[];
+  };
+
+  const viaGetAll = extended.getAll?.("set-cookie");
+  if (viaGetAll && viaGetAll.length > 0) {
+    return viaGetAll;
+  }
+  const viaStandard = extended.getSetCookie?.();
+  if (viaStandard && viaStandard.length > 0) {
+    return viaStandard;
+  }
+  const single = headers.get("set-cookie");
+  return single ? [single] : [];
+}
+
+export function jsonOk<T>(data: T, status = 200, headers?: Record<string, string>): Response {
   const body: ApiSuccess<T> = { ok: true, data };
-  return jsonResponse(body, status);
+  return jsonResponse(body, status, headers);
 }
 
 /**
@@ -53,7 +80,12 @@ export function jsonOk<T>(data: T, status = 200): Response {
  * unless the worker runs in development, so a production response can never
  * carry a stack trace, SQL fragment or secret (requirements §14, §33.4).
  */
-export function jsonFail(c: Context<AppBindings>, code: ErrorCode, diagnostic?: string): Response {
+export function jsonFail(
+  c: Context<AppBindings>,
+  code: ErrorCode,
+  diagnostic?: string,
+  headers?: Record<string, string>,
+): Response {
   const body: ApiFailure = {
     ok: false,
     error: { code, message: publicMessageFor(code) },
@@ -61,5 +93,5 @@ export function jsonFail(c: Context<AppBindings>, code: ErrorCode, diagnostic?: 
   if (diagnostic !== undefined && c.env.ENVIRONMENT === "development") {
     body.error.diagnostic = diagnostic;
   }
-  return jsonResponse(body, statusFor(code));
+  return jsonResponse(body, statusFor(code), headers);
 }

@@ -1,15 +1,37 @@
 import { app } from "./app";
 import type { Env } from "./env";
+import { purgeExpiredAuditLogs, purgeExpiredRateLimits } from "./services/audit";
 
 export default {
   fetch: app.fetch,
 
   /**
-   * Scheduled maintenance. P2 implements the audit-log sweep here: retention is
-   * exactly 30 days and users cannot clear logs manually (§5).
+   * Scheduled maintenance, from the hourly cron trigger in wrangler.toml.
+   *
+   * Two jobs, both pure retention:
+   * - audit entries older than exactly 30 days are deleted (§5; a user can
+   *   never clear the log, so this is the only path that removes them);
+   * - expired rate-limit windows are dropped, since they are derived counters
+   *   rather than history.
+   *
+   * `waitUntil` keeps the isolate alive until the sweeps finish; a failure is
+   * logged rather than thrown, because a missed sweep must not crash the trigger
+   * and will run again on the next tick.
    */
-  scheduled(_controller: ScheduledController, _env: Env, _ctx: ExecutionContext): void {
-    // Intentionally empty in P0: the cron trigger is wired in wrangler.toml so
-    // the deployment shape is already correct.
+  scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): void {
+    ctx.waitUntil(
+      (async () => {
+        const now = Date.now();
+        try {
+          const auditRows = await purgeExpiredAuditLogs(env, now);
+          const rateLimitRows = await purgeExpiredRateLimits(env, now);
+          console.log(
+            `scheduled cleanup: removed ${auditRows} audit row(s), ${rateLimitRows} rate-limit row(s)`,
+          );
+        } catch (error) {
+          console.error("scheduled cleanup failed", error);
+        }
+      })(),
+    );
   },
 } satisfies ExportedHandler<Env>;

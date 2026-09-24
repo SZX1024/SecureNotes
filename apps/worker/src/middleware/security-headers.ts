@@ -1,6 +1,7 @@
 import type { MiddlewareHandler } from "hono";
 
 import type { AppBindings } from "../env";
+import { readSetCookieHeaders } from "../lib/http";
 
 /**
  * Baseline response headers (requirements §13).
@@ -38,6 +39,14 @@ export function securityHeaders(): MiddlewareHandler<AppBindings> {
 
     const response = c.res;
     const headers = new Headers(response.headers);
+
+    // Rebuilding a Response copies only the iterable headers, and `Set-Cookie`
+    // is not among them: without this loop every session cookie would be
+    // dropped between the handler and the client.
+    for (const cookie of readSetCookieHeaders(response.headers)) {
+      headers.append("set-cookie", cookie);
+    }
+
     for (const [name, value] of Object.entries(COMMON_HEADERS)) {
       headers.set(name, value);
     }

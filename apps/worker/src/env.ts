@@ -5,16 +5,40 @@
  * `pnpm cf-typegen` (`wrangler types`) out of wrangler.toml, so a typo or a
  * removed binding becomes a type error instead of a runtime surprise.
  *
- * `ENVIRONMENT` is widened deliberately: wrangler.toml only describes the
- * development value, while the deployed worker sets "production", and the code
- * must be able to branch on both.
+ * `ENVIRONMENT` and `ALLOWED_ORIGINS` are widened deliberately: wrangler.toml
+ * only describes the development values, while the deployed worker sets
+ * different ones, and the code must be able to branch on both.
+ *
+ * Secrets are declared here rather than in wrangler.toml because they must
+ * never be committed. They are set with `wrangler secret put` in production and
+ * supplied by `.dev.vars` locally; a missing value is a startup error rather
+ * than a silently weak default.
  */
-export type Env = Omit<Cloudflare.Env, "ENVIRONMENT"> & {
+export type Env = Omit<Cloudflare.Env, "ENVIRONMENT" | "ALLOWED_ORIGINS"> & {
   ENVIRONMENT: "development" | "production";
+  /** Comma-separated allowlist of origins permitted to call the API (§14). */
+  ALLOWED_ORIGINS: string;
+  /** Base64 256-bit AES-GCM root key; per-purpose keys are derived from it. */
+  SECRET_WRAP_KEY: string;
+  /** Base64 256-bit HMAC key backing the stateless CSRF token. */
+  CSRF_SIGNING_KEY: string;
 };
+
+/** The authenticated session attached to a request by the session middleware. */
+export interface SessionContext {
+  id: string;
+  userId: string;
+  createdAt: number;
+  lastSeenAt: number;
+  expiresAt: number;
+  rememberDevice: boolean;
+}
 
 export interface Variables {
   requestId: string;
+  session?: SessionContext;
+  /** Raw request body captured by `jsonBodyGuard`, parsed once by the handler. */
+  rawBody?: string;
 }
 
 /** Hono generic used by every handler and middleware in this worker. */

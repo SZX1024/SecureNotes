@@ -109,8 +109,39 @@ Tracked here until decided; none of them block P0.
 4. **History-save interval.** Requirements §18 leaves the interval to implementation.
    Proposal: at most one historical revision per 5 minutes of active editing, plus one on
    explicit save, capped at 10 (restoring history creates a new current revision).
-5. **Rate-limit thresholds.** Requirements §3 requires progressive backoff with a cap but
-   gives no numbers. Proposal to be reviewed in P2: per-account failures
-   1s→2s→4s… capped at 60s, 10 failures/hour/account, 30/hour/IP, plus a global ceiling.
+5. **Rate-limit thresholds.** **Decided in P2** (the proposal was accepted): per-account
+   failures back off 1s→2s→4s… capped at 60s, 10 attempts/hour/account, 30/hour/IP and a
+   300/hour ceiling per endpoint bucket. The values live in
+   `packages/shared/src/policy.ts` so the client can show the same cooldown the server
+   enforces. There is never a permanent lockout.
 6. **Deleted-folder name disclosure.** Recycle bin keeps ids and structure for 30 days;
    names remain encrypted throughout, including in the bin. Confirm this is the intent.
+
+## P2 decisions (authentication)
+
+- **Session expiry model.** §4 states exactly two rules — a 40-minute sliding inactivity
+  window and a 30-day absolute cap for remember-device — so those are the only two
+  enforced. `expires_at` stores the sliding deadline; the absolute cap is derived from
+  `created_at` + `remember_device`, so no extra column was needed and the schema did not
+  have to change.
+- **Stateless CSRF token.** The token is an HMAC-SHA-256 of the session id under
+  `CSRF_SIGNING_KEY`: no session column, no extra write, bound to one session, and it dies
+  with that session. The `X-CSRF-Token` header is required — accepting the cookie alone
+  would add nothing beyond SameSite.
+- **TOTP replay.** The accepted time-step is recorded and a code from a consumed step is
+  refused even inside its window (RFC 6238 §5.2). Accepted consequence: a second login
+  within the same 30-second window fails.
+- **Purpose-separated at-rest keys.** The single `SECRET_WRAP_KEY` root derives
+  per-purpose AES-GCM keys with HKDF-SHA-256 (`totp-secret`, `audit-detail`), so a blob
+  sealed for one purpose cannot be opened as another while only one secret must be
+  provisioned.
+- **Enrolment does not create a session.** After `/auth/setup` the user logs in through the
+  normal TOTP path, so first-run setup can never bypass the second factor.
+- **Cookies are attached to the response, not the context.** `setCookie(c, …)` followed by
+  a handler returning a freshly built `Response` silently drops cookies in Hono, and the
+  P0 `jsonOk` helper returns a raw Response — a live bug that this phase fixed. Cookies are
+  appended to the outgoing response, and the security-header middleware copies
+  `Set-Cookie` explicitly when it rebuilds one, because header iteration omits it.
+- **`getAccount` orders by rowid.** The schema holds exactly one account, but ordering by
+  the caller-supplied `created_at` let a row with a smaller timestamp shadow the real
+  account. Insertion order is the deterministic, non-forgeable tiebreaker.

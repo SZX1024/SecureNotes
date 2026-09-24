@@ -27,11 +27,29 @@ describe("GET /api/v1/health", () => {
   });
 
   it("rejects other methods with 405 instead of silently 404ing", async () => {
-    const response = await SELF.fetch(HEALTH_URL, { method: "POST" });
+    // State-changing methods must carry an allowed Origin (§14), so this
+    // request is well formed for the origin guard and reaches the method check.
+    const response = await SELF.fetch(HEALTH_URL, {
+      method: "POST",
+      headers: { origin: "http://localhost:5173", "content-type": "application/json" },
+      body: "{}",
+    });
     expect(response.status).toBe(405);
     const body = (await response.json()) as { ok: boolean; error: { code: string } };
     expect(body.ok).toBe(false);
     expect(body.error.code).toBe("METHOD_NOT_ALLOWED");
+  });
+
+  it("rejects a state-changing request from a foreign origin", async () => {
+    const response = await SELF.fetch(HEALTH_URL, {
+      method: "POST",
+      headers: { origin: "https://evil.example", "content-type": "application/json" },
+      body: "{}",
+    });
+
+    expect(response.status).toBe(403);
+    const body = (await response.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("ORIGIN_REJECTED");
   });
 });
 

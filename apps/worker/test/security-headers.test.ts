@@ -102,6 +102,14 @@ describe("error responses", () => {
 
 function productionEnv(): Env {
   // Built explicitly rather than by spreading: binding objects carry their
-  // behaviour on the prototype.
-  return { ENVIRONMENT: "production", DB: env.DB, ATTACHMENTS: env.ATTACHMENTS };
+  // behaviour on the prototype. Secrets come from the test pool's bindings.
+  const testBindings = env as unknown as Env;
+  return {
+    ENVIRONMENT: "production",
+    DB: testBindings.DB,
+    ATTACHMENTS: testBindings.ATTACHMENTS,
+    ALLOWED_ORIGINS: "https://notes.example.com",
+    SECRET_WRAP_KEY: testBindings.SECRET_WRAP_KEY,
+    CSRF_SIGNING_KEY: testBindings.CSRF_SIGNING_KEY,
+  };
 }

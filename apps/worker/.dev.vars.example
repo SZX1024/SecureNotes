@@ -1,6 +1,15 @@
 # Copy to `.dev.vars` for local `wrangler dev`. Never commit `.dev.vars`.
 #
-# Secrets are introduced in later phases (P2 auth, P3 crypto). Nothing here is
-# read by the P0 skeleton yet; the file exists so the convention is in place.
+# Generate each value with:
+#   node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+#
+# SECRET_WRAP_KEY  AES-256-GCM key that seals recoverable secrets at rest
+#                  (today: the TOTP secret, §3/§25). Losing it only means the
+#                  TOTP secret must be re-enrolled; it never touches note data.
+# CSRF_SIGNING_KEY HMAC key behind the stateless double-submit CSRF token (§14).
+#
+# Both must be 32 random bytes, base64 encoded. The tests do not read this file:
+# they inject their own deterministic values from vitest.config.ts.
 
-# ENVIRONMENT = "development"
+SECRET_WRAP_KEY = "REPLACE_WITH_BASE64_32_BYTES"
+CSRF_SIGNING_KEY = "REPLACE_WITH_BASE64_32_BYTES"

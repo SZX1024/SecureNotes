@@ -52,6 +52,21 @@ No Cloudflare account is needed for development: `wrangler dev` runs D1 and R2 l
 under `.wrangler/state` (git-ignored). Deploying requires a real account, a domain and
 replacing the placeholder `database_id` in `apps/worker/wrangler.toml`.
 
+### Worker secrets
+
+Authentication needs two 256-bit secrets. Locally they come from `.dev.vars`
+(git-ignored; see `.dev.vars.example`); in production they are set with
+`wrangler secret put`:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"   # run twice
+cp apps/worker/.dev.vars.example apps/worker/.dev.vars                        # paste the values
+```
+
+`ALLOWED_ORIGINS` in `apps/worker/wrangler.toml` must list the origins allowed to call the
+API. Development lists the Vite origins; production must list only the deployed origin,
+because the worker sees the browser's `Origin`, not its own.
+
 ### Restricted environments
 
 `wrangler` keeps a global registry under `$HOME/.config/.wrangler` and aborts with
@@ -86,8 +101,8 @@ CI runs the same command on every push and pull request (`.github/workflows/ci.y
 | ----- | ----------------------------------------------------------------------------- | ----- |
 | P0    | Scaffolding: workspace, worker skeleton, client shell, tests, documentation   | done  |
 | P1    | D1 schema and migrations for all core tables                                  | done  |
-| P2    | Auth: enrolment, TOTP login, recovery codes, sessions, rate limiting, audit   | next  |
-| P3    | Crypto: key hierarchy, envelope, recovery wrapping, TOTP rebind migration     |       |
+| P2    | Auth: enrolment, TOTP login, recovery codes, sessions, rate limiting, audit   | done  |
+| P3    | Crypto: key hierarchy, envelope, recovery wrapping, TOTP rebind migration     | next  |
 | P4    | Local layer: IndexedDB migrations, device key, App Lock, PWA shell            |       |
 | P5    | Data: notes, folders, tags, revisions, recycle bin, attachments, search       |       |
 | P6    | Editor: WYSIWYG, source mode, sanitisation, CSP, Mermaid, KaTeX, SVG, iframes |       |

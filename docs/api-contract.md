@@ -79,35 +79,69 @@ Method sets are strict: an unsupported method returns `METHOD_NOT_ALLOWED`, neve
 misleading `404`. Every authenticated endpoint verifies authenticated user + resource
 ownership + operation validity (§26).
 
-| Method                | Path                                  | Phase | Notes                                                    |
-| --------------------- | ------------------------------------- | ----- | -------------------------------------------------------- |
-| GET                   | `/api/v1/health`                      | P0 ✅ | Version and environment only, unauthenticated            |
-| POST                  | `/api/v1/auth/login`                  | P2    | Username + TOTP; returns wrapped key material + KDF salt |
-| POST                  | `/api/v1/auth/recovery`               | P2    | Username + one recovery code                             |
-| POST                  | `/api/v1/auth/logout`                 | P2    | Revokes the current session                              |
-| GET                   | `/api/v1/auth/session`                | P2    | Current session and device                               |
-| POST                  | `/api/v1/auth/setup`                  | P2    | First-run enrolment (single account)                     |
-| GET                   | `/api/v1/sessions`                    | P2    | Max 5; least-recently-active is evicted on a 6th login   |
-| DELETE                | `/api/v1/sessions/:id`                | P2    | Individual revoke                                        |
-| POST                  | `/api/v1/sessions/revoke-all`         | P2    | Includes the current session                             |
-| POST                  | `/api/v1/security/totp/change/start`  | P3    | One-time operation id, short lifetime                    |
-| POST                  | `/api/v1/security/totp/change/verify` | P3    | Verifies new secret, then invalidates old                |
-| GET/POST/PATCH/DELETE | `/api/v1/notes/...`                   | P5    | Ciphertext payloads, `base_revision` enforced            |
-| GET/POST/PATCH/DELETE | `/api/v1/folders/...`                 | P5    | Encrypted names, max depth 10                            |
-| GET/POST/PATCH/DELETE | `/api/v1/tags/...`                    | P5    | Encrypted names, max 10 per note                         |
-| GET/POST/DELETE       | `/api/v1/attachments/...`             | P5    | Images only, ≤ 20 MB, random R2 ids                      |
-| POST                  | `/api/v1/sync/push`                   | P7    | Batched, idempotent, per-object conflict                 |
-| GET                   | `/api/v1/sync/pull`                   | P7    | Cursor-based incremental pull                            |
-| POST                  | `/api/v1/export/...`                  | P8    | Manual, full export only                                 |
-| POST                  | `/api/v1/import/...`                  | P8    | Fully transactional, validate-then-commit                |
-| GET                   | `/api/v1/audit-logs`                  | P2    | 30-day window, sensitive fields encrypted                |
-| POST                  | `/api/v1/recovery-codes/regenerate`   | P3    | Re-wraps the DEK for 10 new codes                        |
+| Method                | Path                                  | Phase | Notes                                                  |
+| --------------------- | ------------------------------------- | ----- | ------------------------------------------------------ |
+| GET                   | `/api/v1/health`                      | P0 ✅ | Version and environment only, unauthenticated          |
+| GET                   | `/api/v1/auth/status`                 | P2 ✅ | Whether first-run enrolment has happened               |
+| POST                  | `/api/v1/auth/setup`                  | P2 ✅ | First-run enrolment; secrets returned exactly once     |
+| POST                  | `/api/v1/auth/login`                  | P2 ✅ | Username + TOTP; returns the TOTP secret (ADR-002)     |
+| POST                  | `/api/v1/auth/recovery`               | P2 ✅ | Username + one recovery code; revokes other sessions   |
+| POST                  | `/api/v1/auth/logout`                 | P2 ✅ | Revokes the current session                            |
+| GET                   | `/api/v1/auth/session`                | P2 ✅ | Current session and device                             |
+| GET                   | `/api/v1/sessions`                    | P2 ✅ | Max 5; least-recently-active is evicted on a 6th login |
+| PATCH                 | `/api/v1/sessions/:id`                | P2 ✅ | Renames a device                                       |
+| DELETE                | `/api/v1/sessions/:id`                | P2 ✅ | Individual revoke                                      |
+| POST                  | `/api/v1/sessions/revoke-all`         | P2 ✅ | Includes the current session                           |
+| GET                   | `/api/v1/audit-logs`                  | P2 ✅ | 30-day window, sensitive fields encrypted              |
+| POST                  | `/api/v1/security/totp/change/start`  | P3    | One-time operation id, short lifetime                  |
+| POST                  | `/api/v1/security/totp/change/verify` | P3    | Verifies new secret, then invalidates old              |
+| POST                  | `/api/v1/recovery-codes/regenerate`   | P3    | Re-wraps the DEK for 10 new codes                      |
+| GET/POST/PATCH/DELETE | `/api/v1/notes/...`                   | P5    | Ciphertext payloads, `base_revision` enforced          |
+| GET/POST/PATCH/DELETE | `/api/v1/folders/...`                 | P5    | Encrypted names, max depth 10                          |
+| GET/POST/PATCH/DELETE | `/api/v1/tags/...`                    | P5    | Encrypted names, max 10 per note                       |
+| GET/POST/DELETE       | `/api/v1/attachments/...`             | P5    | Images only, ≤ 20 MB, random R2 ids                    |
+| POST                  | `/api/v1/sync/push`                   | P7    | Batched, idempotent, per-object conflict               |
+| GET                   | `/api/v1/sync/pull`                   | P7    | Cursor-based incremental pull                          |
+| POST                  | `/api/v1/export/...`                  | P8    | Manual, full export only                               |
+| POST                  | `/api/v1/import/...`                  | P8    | Fully transactional, validate-then-commit              |
 
 Exact decomposition may be refined during implementation without changing requirements
 (§15); this table is updated as routes land.
 
+## Authentication rules (P2)
+
+- **Origin allowlist.** Every request is checked against `ALLOWED_ORIGINS`. A
+  state-changing method must carry an allowed `Origin` (or `Referer`); absence is a
+  rejection, not a pass. Safe methods are only checked when they carry one, because
+  browsers omit `Origin` for same-origin navigations.
+- **Cookies.** `session` is `HttpOnly; Secure; SameSite=Strict; Path=/`. `csrf` is
+  readable by same-origin script by design. A remembered device gets `Max-Age` of 30
+  days; any other session is bounded by the 40-minute idle window.
+- **CSRF.** The client echoes the `csrf` value in `X-CSRF-Token`; the worker compares it
+  with an HMAC of the session id, so a token is valid only for the session it was issued
+  to. The header is required — accepting the cookie alone would reduce this to SameSite.
+- **Body.** `application/json` only, with an 8 KB ceiling on authentication payloads.
+- **Credential failures are indistinguishable.** Unknown username, wrong TOTP code,
+  replayed code and spent recovery code all return `INVALID_CREDENTIALS` with the same
+  generic message, and a wrong code for an unknown account performs the same work as one
+  for the real account.
+- **Replay.** A TOTP time-step that has already been accepted is refused, even inside its
+  validity window; a recovery code is single-use and the update is conditional, so two
+  concurrent redemptions cannot both win.
+- **Throttling.** Per-IP, per-account and per-endpoint windows plus exponential backoff
+  (1s, 2s, 4s … capped at 60s, never a permanent lockout). `RATE_LIMITED` carries
+  `Retry-After`.
+- **401 means "discard local key material".** Any `UNAUTHENTICATED` response — expired,
+  revoked or unknown session — is the client's signal to delete cached keys and return to
+  authentication (§4). `GET /api/v1/auth/session` answers `200` with
+  `authenticated: false` instead, so start-up does not need to treat a 401 as an error.
+- **Session id is not a credential.** Only the 256-bit token authenticates; the id is
+  public and is never accepted as a token.
+
 ## Request limits
 
 Per endpoint, as applicable: strict `Content-Type` check, body-size limit, field count,
-nesting depth and array length limits, and parameterised SQL only. Attachments add a
-20 MB limit and image-only MIME validation. Production errors never expose SQL detail.
+nesting depth and array length limits, and parameterised SQL only. Authentication
+payloads are capped at 8 KB and every other JSON body at 2 MB; `Content-Length` is not
+trusted on its own, the received size decides. Attachments add a 20 MB limit and
+image-only MIME validation. Production errors never expose SQL detail.
