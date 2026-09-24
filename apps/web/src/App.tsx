@@ -66,36 +66,46 @@ export function App() {
   // gives one stable instance for the component's lifetime.
   const [keyStore] = useState(() => new KeyStore());
   const [searchIndex] = useState(() => new NoteSearchIndex());
+  /**
+   * Bumped whenever the index is rebuilt. The search memo depends on this rather
+   * than on `notes`, so the coupling is explicit instead of hoping the two change
+   * together.
+   */
+  const [indexVersion, setIndexVersion] = useState(0);
 
   /** Loads and decrypts everything, then builds the in-memory index (§11). */
-  const refresh = useCallback(async (database: SecureNotesDatabase, unlocked: UnlockedAccount) => {
-    const context: LocalContext = {
-      db: database,
-      dek: unlocked.dek,
-      userId: unlocked.userId,
-      keyVersion: unlocked.keyVersion,
-    };
-    const stored = await readAllLocalNotes(context);
-    setNotes(stored);
+  const refresh = useCallback(
+    async (database: SecureNotesDatabase, unlocked: UnlockedAccount) => {
+      const context: LocalContext = {
+        db: database,
+        dek: unlocked.dek,
+        userId: unlocked.userId,
+        keyVersion: unlocked.keyVersion,
+      };
+      const stored = await readAllLocalNotes(context);
+      setNotes(stored);
 
-    // Tag and folder names are not linked into the local rows yet (see
-    // HANDOFF §16.2), so they are indexed as empty rather than faked.
-    searchIndex.build(
-      stored.map((entry) => ({
-        id: entry.note.id,
-        title: entry.document.title,
-        body: entry.document.body,
-        tags: [],
-        folderName: null,
-        attachmentNames: [],
-        updatedAt: entry.note.updatedAt,
-        createdAt: entry.note.createdAt,
-        pinned: entry.note.pinned,
-      })),
-    );
+      // Tag and folder names are not linked into the local rows yet (see
+      // HANDOFF §16.2), so they are indexed as empty rather than faked.
+      searchIndex.build(
+        stored.map((entry) => ({
+          id: entry.note.id,
+          title: entry.document.title,
+          body: entry.document.body,
+          tags: [],
+          folderName: null,
+          attachmentNames: [],
+          updatedAt: entry.note.updatedAt,
+          createdAt: entry.note.createdAt,
+          pinned: entry.note.pinned,
+        })),
+      );
 
-    return context;
-  }, []);
+      setIndexVersion((version) => version + 1);
+      return context;
+    },
+    [searchIndex],
+  );
 
   /** Signs the user out locally and destroys the keys (§4). */
   const lockAndForget = useCallback(
@@ -111,7 +121,7 @@ export function App() {
       }
       setScreen(db && reason === "locked" ? "unlock" : "login");
     },
-    [db],
+    [db, keyStore, searchIndex],
   );
 
   /** Any 401 means the session is gone: discard local keys and re-authenticate. */
@@ -178,7 +188,7 @@ export function App() {
       }
     }, 30_000);
     return () => clearInterval(timer);
-  }, [screen, lockAndForget]);
+  }, [screen, lockAndForget, keyStore]);
 
   const openNote = useCallback(
     (id: string) => {
@@ -294,7 +304,11 @@ export function App() {
       return null;
     }
     return new Map(searchIndex.search(query).map((hit) => [hit.id, hit]));
-  }, [query, notes, searchIndex]);
+    // `indexVersion` is the rebuild signal. The index is a stable instance whose
+    // *contents* change in place, so the rule cannot see the dependency: the memo
+    // has to re-run when `refresh` rebuilds it, not when `notes` happens to change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, indexVersion, searchIndex]);
 
   const visibleNotes = useMemo(() => {
     const decorated = notes

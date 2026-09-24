@@ -12,6 +12,16 @@ const rootPackage = JSON.parse(
   readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
 ) as { version: string };
 
+/**
+ * Where the dev server forwards /api.
+ *
+ * Overridable because the default port may already be taken on a developer's
+ * machine: `VITE_API_TARGET=http://127.0.0.1:8791 pnpm dev:web`. Only the dev
+ * server uses this; production serves the client and the API from one origin
+ * through the worker's `[assets]` binding.
+ */
+const apiTarget = process.env["VITE_API_TARGET"] ?? "http://127.0.0.1:8787";
+
 export default defineConfig({
   plugins: [react()],
   define: {
@@ -24,7 +34,7 @@ export default defineConfig({
     // origin, which forwards /api to the worker. No CORS is ever enabled (§14).
     proxy: {
       "/api": {
-        target: "http://127.0.0.1:8787",
+        target: apiTarget,
         changeOrigin: false,
       },
     },

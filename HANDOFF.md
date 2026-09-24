@@ -586,9 +586,20 @@ logout 带 CSRF   → 200，2 个 Cookie 被清除（Max-Age=0）
 ### 17.4 **请在浏览器验收的清单**（我无法替代真实视觉/交互判断）
 
 ```bash
-cd apps/worker && HOME="$PWD/../../.sandbox-home" npx wrangler dev --port 8791   # 注意：本机 8787 被别的进程占用
-pnpm --filter @securenotes/web dev                                               # http://localhost:5173
+# 本机 8787 已被别的进程占用，所以把 worker 跑在 8791 并把 Vite 代理指过去：
+cd apps/worker
+HOME=/home/SZX10246/Projects/software/SecureNotes/.sandbox-home npx wrangler dev --port 8791
+
+# 另一个终端：
+cd /home/SZX10246/Projects/software/SecureNotes
+VITE_API_TARGET=http://127.0.0.1:8791 pnpm dev:web      # http://localhost:5173
 ```
+
+`VITE_API_TARGET` 是本次新加的开关（`apps/web/vite.config.ts`），默认仍是 8787。
+**若 8787 上跑着别的服务，`pnpm dev:web` 会把 /api 代理到那个服务**，界面会一直失败——务必确认代理指向本项目的 worker。
+
+本次已实测（真实 HTTP，非 jsdom）：Vite 提供外壳 200、`/api/v1/auth/status` 经代理返回
+`{"ok":true,"data":{"initialized":false}}`、入口模块可编译并提供、`sw.js` 在根路径可用。
 
 1. 首次打开应显示 **First run**；输入用户名后显示 **otpauth URI 与 10 个恢复码**（只显示一次）。
 2. 用认证器扫码/添加 URI 后，用 **Sign in** 输入 6 位码登录。
