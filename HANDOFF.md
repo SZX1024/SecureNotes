@@ -658,3 +658,39 @@ VITE_API_TARGET=http://127.0.0.1:8791 pnpm dev:web      # http://localhost:5173
   `apps/worker/.wrangler/state`）。生产环境下的「重新完成注册」流程**尚未实现**，
   已记录为后续项。
 - 本地 D1 已重置为首运行状态，你打开浏览器应看到 **First run**。
+
+## 19. P6 第 1 批：渲染安全（本次交付）— **P6 未完成**
+
+### 19.1 交付物
+
+| 文件                                             | 内容                                                                                                |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| `apps/web/src/render/sanitize.ts`                | 净化核心：`sanitizeHtml`、`sanitizeSvg`、`sanitizeCss`、URL 策略、嵌入隔离、`containsActiveContent` |
+| `apps/web/src/render/sanitize.test.ts`           | **26 个攻击性测试**（§31 的 XSS/存储型 XSS/SVG/净化绕过/CSS 注入/iframe 隔离）                      |
+| `apps/worker/src/middleware/security-headers.ts` | **外壳 CSP**（P0 时预留、本次落地）+ 按内容类型选择策略                                             |
+| `apps/worker/test/security-headers.test.ts`      | +4 测试（外壳策略内容、API 策略未受影响、按内容类型分流）                                           |
+
+### 19.2 三个实测出来的关键事实（都改变了实现）
+
+1. **DOMPurify 的 allowlist 是闸门，hook 只能收紧不能再放宽。** 不在 `ALLOWED_TAGS`/`ALLOWED_ATTR` 里的东西**在 hook 运行前就被删掉了**，所以 `style` 与**每个 SVG 子元素**（rect/circle/use…）都必须显式列出，否则「合法内容也一起消失」。
+2. **绝对不要自定义 `ALLOWED_URI_REGEXP`。** DOMPurify 会把它套用到**所有不在其内部 URI-safe 列表里的属性**，而不只是 URL —— 我最初写了 `/^(?:https?:|\/|#)/i`，结果 `type="checkbox"` 被判为非法、输入框整个变成空。URL 策略改为在 hook 里按属性判定。
+3. **位置相关的规则要自己做。** 「元素是否在 `<svg>` 内（故只允许 `#fragment` 引用）」「input 是否是任务清单复选框」都不是平铺的属性过滤能表达的 → `hardenFragment` 在解析后的 DOM 上执行。
+
+### 19.3 已实现并测试的安全属性
+
+- `<script>`/`on*`/`javascript:`/`vbscript:`/`data:` 全部拒绝；`//host` 协议相对 URL 也拒绝。
+- 外链自动 `target="_blank" rel="noopener noreferrer"`，站内锚点**不**加 target（§12）。
+- CSS 严格允许列表 + 逐属性值校验；`url()`/`expression()`/`@import`/反斜杠转义/注释走私全部拒绝。
+- SVG：去 script/事件/`foreignObject`；`href` 只允许 `#fragment`（`<use href="#x">` 可用，外部引用被剥）。
+- 嵌入：**sandbox 含 `allow-scripts` 但绝不含 `allow-same-origin`**，`no-referrer`，无权限；仅 HTTPS。
+- 净化**幂等**（二次净化结果相同），并有经典变异的绕过测试（`<scr<script>ipt>`、`<math><mtext><script>`、`noscript` 属性逃逸、`&#106;avascript:` 等）。
+- 外壳 CSP：`script-src 'self'`（**无 inline/eval**）、`object-src 'none'`、`frame-ancestors 'none'`、`img-src https: data:`、`frame-src https:`、`style-src 'self' 'unsafe-inline'`（KaTeX/Mermaid/净化后的 style 属性需要）、`connect-src 'self'`。
+
+### 19.4 P6 尚未完成（下一批）
+
+1. **编辑器本体**：Milkdown WYSIWYG + CodeMirror 6 源码模式（移动端默认 WYSIWYG）、语法高亮（Shiki）、动画 GIF/WebP 保留。
+2. **未知 Markdown 扩展的 round-trip**（需求要求先写 round-trip 测试再实现）。
+3. **KaTeX 与 Mermaid 依赖接入**：Mermaid 需确认不需要 `unsafe-eval`（若需要，与 §13 冲突，必须先停下来讨论）；KaTeX 用 `trust: false`。
+4. **粘贴/拖放**：富文本网页粘贴的提示与安全转换路径；剪贴板图片立即创建附件并插入内部附件 ID；拖放仅接受图片、>20MB 拒绝。
+5. **附件引用 UI**（引用计数/归零异步删除的服务端已就绪）。
+6. `manifest.webmanifest` 真实图标、主题手动切换（跟随系统/亮/暗）——P5 遗留项。

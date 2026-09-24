@@ -212,3 +212,33 @@ Tracked here until decided; none of them block P0.
 - **The shell is served only to browser navigations.** A request that does not ask
   for HTML, or any `/api/*` path, keeps the JSON error contract, so an asset can
   never be returned where a caller parses JSON.
+
+## P6 decisions (rendering security)
+
+- **The sanitizer is an allowlist, and its allowlists are the gate.** DOMPurify
+  removes any tag or attribute not named in `ALLOWED_TAGS` / `ALLOWED_ATTR`
+  _before_ a hook runs, so a hook can only restrict further — it can never restore
+  something the allowlist omitted. `style` and every SVG child element therefore
+  have to be named explicitly; the value filtering still happens in the hook.
+- **No custom `ALLOWED_URI_REGEXP`.** DOMPurify applies that regexp to every
+  attribute that is not on its internal URI-safe list, not only to URLs, so a
+  URI-shaped pattern silently deletes ordinary enumerated values — a
+  `type="checkbox"` became an empty input. URL policy is enforced per attribute in
+  the hooks instead, on top of DOMPurify's own default URI handling.
+- **Structural rules run after the library.** Whether an element sits inside an
+  `<svg>` (and so may only reference `#fragment`), or whether an `<input>` is a
+  task-list checkbox, are questions about position that a flat attribute filter
+  cannot answer. `hardenFragment` applies them to the parsed result.
+- **`style` is allowed, but never verbatim.** A strict property allowlist with a
+  value check per property: `url()`, `expression()`, `@import` and CSS escapes are
+  rejected outright, which is what stops `background: url(...)` from reporting a
+  note's existence to a third party.
+- **Embeds are isolated by sandbox, not by relaxing CSP.** §12 permits arbitrary
+  HTTPS iframes and §13 forbids weakening CSP for script, so an embed gets
+  `allow-scripts` **without** `allow-same-origin`, `no-referrer`, and no
+  permissions. With an opaque origin it cannot reach this origin's DOM, storage or
+  the DEK.
+- **The shell has its own CSP, chosen by content type.** The API keeps
+  `default-src 'none'`; the shell needs inline _styles_ (KaTeX, Mermaid, sanitised
+  `style` attributes) and HTTPS frames, so it gets a policy that names them while
+  `script-src` stays `'self'` with no `'unsafe-inline'` and no `'unsafe-eval'`.

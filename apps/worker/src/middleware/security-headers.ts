@@ -33,6 +33,49 @@ const API_HEADERS: Readonly<Record<string, string>> = {
   "cache-control": "no-store",
 };
 
+/**
+ * Policy for the application shell (§13).
+ *
+ * Strict, but not `default-src 'none'`: the app needs to run its own script, draw
+ * KaTeX and Mermaid output (which use inline styles), show external HTTPS images,
+ * and embed arbitrary HTTPS iframes, which §12 permits as a product feature.
+ *
+ * What is deliberately absent is any way to execute script that the app did not
+ * ship: no `'unsafe-inline'` and no `'unsafe-eval'` in `script-src`, no CDN origin,
+ * and `object-src 'none'`. §13 forbids weakening this to permit arbitrary script
+ * execution, so an embedded iframe is isolated by its sandbox (§12) rather than by
+ * relaxing the policy.
+ */
+export const SHELL_CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  // Inline styles are required for sanitised `style` attributes, KaTeX and Mermaid
+  // SVG output. Styles cannot execute script; the values themselves are filtered
+  // by the render layer.
+  "style-src 'self' 'unsafe-inline'",
+  // External images must be HTTPS; `data:` covers inline icons in generated SVG.
+  "img-src 'self' https: data:",
+  "font-src 'self' data:",
+  // The client talks only to its own origin, which is what keeps CORS off.
+  "connect-src 'self'",
+  // §12: arbitrary HTTPS embeds are a product requirement.
+  "frame-src https:",
+  "worker-src 'self'",
+  "manifest-src 'self'",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-ancestors 'none'",
+].join("; ");
+
+/** Whether a response is the application shell rather than API JSON. */
+export function shellHeadersFor(pathname: string, contentType: string | null): boolean {
+  if (pathname.startsWith("/api/")) {
+    return false;
+  }
+  return (contentType ?? "").toLowerCase().includes("text/html");
+}
+
 export function securityHeaders(): MiddlewareHandler<AppBindings> {
   return async (c, next) => {
     await next();
@@ -50,10 +93,15 @@ export function securityHeaders(): MiddlewareHandler<AppBindings> {
     for (const [name, value] of Object.entries(COMMON_HEADERS)) {
       headers.set(name, value);
     }
-    if (new URL(c.req.url).pathname.startsWith("/api/")) {
+    const pathname = new URL(c.req.url).pathname;
+    if (pathname.startsWith("/api/")) {
       for (const [name, value] of Object.entries(API_HEADERS)) {
         headers.set(name, value);
       }
+    } else if (shellHeadersFor(pathname, headers.get("content-type"))) {
+      // The shell is a different security context from the API, so it gets the
+      // policy its features require rather than the API's `default-src 'none'`.
+      headers.set("content-security-policy", SHELL_CSP);
     }
     // HSTS only where it is meaningful: a real HTTPS deployment. Sending it in
     // local development would break the plain-HTTP dev server.

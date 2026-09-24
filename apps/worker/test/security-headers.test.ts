@@ -114,3 +114,62 @@ function productionEnv(): Env {
     CSRF_SIGNING_KEY: testBindings.CSRF_SIGNING_KEY,
   };
 }
+
+describe("application shell policy (§13)", () => {
+  it("allows the app's own script and never inline or eval", async () => {
+    const { SHELL_CSP } = await import("../src/middleware/security-headers");
+
+    expect(SHELL_CSP).toContain("script-src 'self'");
+    // §13: CSP must never be weakened to permit arbitrary script execution.
+    expect(SHELL_CSP).not.toMatch(/script-src[^;]*'unsafe-inline'/);
+    expect(SHELL_CSP).not.toMatch(/script-src[^;]*'unsafe-eval'/);
+    expect(SHELL_CSP).toContain("object-src 'none'");
+    expect(SHELL_CSP).toContain("frame-ancestors 'none'");
+    expect(SHELL_CSP).toContain("base-uri 'none'");
+  });
+
+  it("accommodates the features §12 requires", async () => {
+    const { SHELL_CSP } = await import("../src/middleware/security-headers");
+
+    // External HTTPS images and arbitrary HTTPS embeds are product requirements.
+    expect(SHELL_CSP).toContain("img-src 'self' https: data:");
+    expect(SHELL_CSP).toContain("frame-src https:");
+    // KaTeX and Mermaid emit inline styles, which cannot execute script.
+    expect(SHELL_CSP).toContain("style-src 'self' 'unsafe-inline'");
+    // Same-origin only, so CORS stays disabled (§14).
+    expect(SHELL_CSP).toContain("connect-src 'self'");
+  });
+
+  it("sends the shell policy for HTML and the API policy for the API", async () => {
+    const { createApp } = await import("../src/app");
+    const { SHELL_CSP } = await import("../src/middleware/security-headers");
+    const app = createApp();
+
+    // A route that returns HTML stands in for the asset binding, so this test does
+    // not depend on whether the client has been built.
+    app.get(
+      "/shell-probe",
+      () => new Response("<html></html>", { headers: { "content-type": "text/html" } }),
+    );
+
+    const html = await app.fetch(new Request("https://example.com/shell-probe"), env as never);
+    expect(html.headers.get("content-security-policy")).toBe(SHELL_CSP);
+
+    const api = await SELF.fetch(HEALTH_URL);
+    expect(api.headers.get("content-security-policy")).toContain("default-src 'none'");
+    // The API policy is unchanged by this addition.
+    expect(api.headers.get("content-security-policy")).not.toContain("unsafe-inline");
+  });
+
+  it("does not apply the shell policy to JSON served outside /api", async () => {
+    const { createApp } = await import("../src/app");
+    const app = createApp();
+    app.get(
+      "/json-probe",
+      () => new Response("{}", { headers: { "content-type": "application/json" } }),
+    );
+
+    const response = await app.fetch(new Request("https://example.com/json-probe"), env as never);
+    expect(response.headers.get("content-security-policy")).toBeNull();
+  });
+});
