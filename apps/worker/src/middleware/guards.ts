@@ -1,4 +1,8 @@
-import { MAX_AUTH_BODY_BYTES, MAX_JSON_BODY_BYTES } from "@securenotes/shared";
+import {
+  MAX_ATTACHMENT_BYTES,
+  MAX_AUTH_BODY_BYTES,
+  MAX_JSON_BODY_BYTES,
+} from "@securenotes/shared";
 import type { Context, MiddlewareHandler } from "hono";
 import type { ZodType } from "zod";
 
@@ -75,7 +79,25 @@ export function originGuard(): MiddlewareHandler<AppBindings> {
  * and keeps the raw text on the context so a handler can parse it once without
  * reading the (single-use) request body twice.
  */
-export function jsonBodyGuard(maxBytes = MAX_JSON_BODY_BYTES): MiddlewareHandler<AppBindings> {
+export interface BodyGuardOptions {
+  maxBytes?: number;
+  /**
+   * Path prefixes that may send `multipart/form-data` instead of JSON.
+   *
+   * Attachment uploads are the only binary body in the API (§14 allows exactly
+   * that), and they are listed explicitly rather than inferred so a future route
+   * cannot accidentally accept multipart.
+   */
+  multipartPrefixes?: readonly string[];
+}
+
+export function jsonBodyGuard(
+  options: BodyGuardOptions | number = {},
+): MiddlewareHandler<AppBindings> {
+  const settings: BodyGuardOptions = typeof options === "number" ? { maxBytes: options } : options;
+  const maxBytes = settings.maxBytes ?? MAX_JSON_BODY_BYTES;
+  const multipartPrefixes = settings.multipartPrefixes ?? [];
+
   return async (c, next) => {
     if (!isUnsafeMethod(c.req.method)) {
       await next();
@@ -83,6 +105,21 @@ export function jsonBodyGuard(maxBytes = MAX_JSON_BODY_BYTES): MiddlewareHandler
     }
 
     const mediaType = (c.req.header("content-type") ?? "").split(";")[0]?.trim().toLowerCase();
+
+    if (
+      mediaType === "multipart/form-data" &&
+      multipartPrefixes.some((prefix) => c.req.path.includes(prefix))
+    ) {
+      // The handler parses the form and enforces the attachment ceiling itself;
+      // this guard only refuses the obviously oversized before it is read.
+      const declared = Number(c.req.header("content-length") ?? Number.NaN);
+      if (Number.isFinite(declared) && declared > MAX_MULTIPART_BODY_BYTES) {
+        throw new ApiError("PAYLOAD_TOO_LARGE", { diagnostic: `content-length ${declared}` });
+      }
+      await next();
+      return;
+    }
+
     if (mediaType !== "application/json") {
       throw new ApiError("UNSUPPORTED_MEDIA_TYPE", {
         diagnostic: `content-type must be application/json, got ${mediaType || "none"}`,
@@ -109,6 +146,12 @@ export function jsonBodyGuard(maxBytes = MAX_JSON_BODY_BYTES): MiddlewareHandler
 export function authBodyGuard(): MiddlewareHandler<AppBindings> {
   return jsonBodyGuard(MAX_AUTH_BODY_BYTES);
 }
+
+/**
+ * Multipart ceiling: the 20 MB attachment limit plus room for the form headers
+ * and the base64-free metadata part.
+ */
+export const MAX_MULTIPART_BODY_BYTES = MAX_ATTACHMENT_BYTES + 64 * 1024;
 
 /**
  * Parses the body captured by `jsonBodyGuard` against a Zod schema (§14 schema

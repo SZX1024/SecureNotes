@@ -322,6 +322,36 @@ export function authedRequest<T = unknown>(
   });
 }
 
+/**
+ * Uploads a multipart body through the worker.
+ *
+ * Attachments are the one endpoint that does not take JSON, so this cannot go
+ * through `apiRequest`; like every other helper it dispatches in-process with
+ * `SELF.fetch` rather than the runtime `fetch`, which would need DNS.
+ */
+export async function apiMultipart(
+  path: string,
+  form: FormData,
+  jar: CookieJar,
+): Promise<Response> {
+  return SELF.fetch(apiUrl(path), {
+    method: "POST",
+    headers: {
+      origin: ALLOWED_ORIGIN,
+      cookie: jar.header,
+      "x-csrf-token": jar.csrf,
+    },
+    body: form,
+  });
+}
+
+/** Authenticated GET that returns the raw response, for binary downloads. */
+export async function apiDownload(path: string, jar: CookieJar): Promise<Response> {
+  return SELF.fetch(apiUrl(path), {
+    headers: { origin: ALLOWED_ORIGIN, cookie: jar.header },
+  });
+}
+
 /** Reads an error code from a failed response body of any shape. */
 export function errorCode(body: unknown): string | undefined {
   return (body as { error?: { code?: string } } | null)?.error?.code;

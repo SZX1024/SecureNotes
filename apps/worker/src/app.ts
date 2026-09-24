@@ -13,6 +13,7 @@ import { auditRoutes } from "./routes/audit";
 import { folderRoutes } from "./routes/folders";
 import { noteRoutes, recycleBinRoutes } from "./routes/notes";
 import { securityRoutes } from "./routes/security";
+import { attachmentRoutes, tagRoutes } from "./routes/tags-attachments";
 import { authRoutes } from "./routes/auth";
 import { sessionRoutes } from "./routes/sessions";
 import { APP_VERSION } from "./version";
@@ -63,7 +64,9 @@ export function createApp(): Hono<AppBindings> {
   });
 
   api.use("*", originGuard());
-  api.use("*", jsonBodyGuard());
+  // Attachments are the one multipart upload; they are named explicitly so a
+  // future route cannot quietly accept something other than JSON.
+  api.use("*", jsonBodyGuard({ multipartPrefixes: ["/attachments"] }));
   api.use("*", attachSession());
 
   // Liveness/version probe. Deliberately unauthenticated and free of any
@@ -87,6 +90,8 @@ export function createApp(): Hono<AppBindings> {
   api.route("/", securityRoutes);
   api.route("/", noteRoutes);
   api.route("/", folderRoutes);
+  api.route("/", tagRoutes);
+  api.route("/", attachmentRoutes);
   api.route("/", recycleBinRoutes);
 
   app.route(API_PREFIX, api);

@@ -488,7 +488,7 @@ logout 带 CSRF   → 200，2 个 Cookie 被清除（Max-Age=0）
 - `manifest.webmanifest` 仍是占位（PNG 图标、更多尺寸）——P9 前补。
 - `App.tsx` 尚未接入 KeyStore/解锁界面（需要登录流程与数据域，P5）。
 
-## 16. P5 第 1、2 批（notes + folders API）— **P5 未完成**
+## 16. P5 第 1、2、3 批（服务端数据域完成）— **P5 未完成（缺客户端）**
 
 ### 16.1 本批已交付
 
@@ -517,15 +517,20 @@ logout 带 CSRF   → 200，2 个 Cookie 被清除（Max-Age=0）
 - **永久删除**：笔记先删（并回退附件引用计数），文件夹**由深到浅**删（自引用是 RESTRICT，顺序错会报错而不是留下孤儿）。
 - 踩坑：这几条批量 UPDATE 最初混用了 `?N` 与 `?` 占位符 → SQLite 编号错乱导致 500；已统一为位置参数并加注释。
 
+### 16.1c 第 3 批：tags + attachments + 保留期清理（`services/tags.ts`、`services/attachments.ts`、`services/maintenance.ts`、`routes/tags-attachments.ts`、`test/tags-attachments.test.ts`，11 测试）
+
+- **tags**：扁平 + 加密名称；`PUT /notes/:id/tags` 是**集合语义**替换，>10 或含他人标签一律拒绝；删除标签只删关系（笔记不受影响）。
+- **attachments**：`multipart/form-data` 上传（§14 允许的唯一二进制体）；**声明大小必须等于实际字节数**——否则可以少报来绕过 20MB 上限；R2 写成功但行写失败时会**回滚对象**，不留孤儿；`GET /attachments/:id/content` 返回密文且 `cache-control: no-store`。
+- **引用计数**：链接与计数同事务（`ref_count` 恒等于链接行数）；归零时**只入队**异步删除，不在用户操作里做 R2 删除；清理是**幂等**的（R2 delete 对不存在的键也成功，且行只在对象删掉后才删）。
+- **保留期**：`services/maintenance.ts` 提供回收站 30 天清理（连带历史与附件引用计数回退）、附件对象清理、tombstone 30 天清理，全部挂到 Cron。
+- **两处踩坑**：① 测试里 multipart 上传最初用了运行时 `fetch`（无 DNS）→ 改用 `SELF.fetch`，并在 `support.ts` 加了 `apiMultipart`/`apiDownload`；② 附件大小上限最初被 Zod 的 `max()` 先拦成 400，与服务的 413 冲突 → **上限只在一处判定**（`storeAttachment`），Zod 不再设上限，避免两个地方各判一次而语义不一致。
+
 ### 16.2 P5 **尚未完成**的部分（下一会话请从这里继续）
 
-1. **tags API**：扁平 + 加密名称、`note_tags` 多对多、**每笔记 ≤10**、删除只删关系。
-2. **attachments API**：multipart 上传到 R2、`image/*` 与 ≤20MB 校验、引用计数、**归零后异步幂等删除 R2**、`note_attachments` 链接端点。
-3. **回收站 30 天 Cron 清理**（`purgeExpired*` 模式已有先例；tombstone 30 天同理由此清理）。
-4. **客户端数据层**：Dexie 仓储（加密后写入）、把每次改动 `enqueueChange` 入队。
-5. **搜索（§11）**：解锁后在内存用 MiniSearch 建索引（标题/正文/标签/文件夹/附件信息），精确 + 模糊 + 高亮，**索引绝不持久化**。
-6. **UI（用户明确要求 P5 一并交付）**：三栏布局（文件夹/标签 | 列表 | 编辑器）、排序（最近修改/创建时间/标题/手动）、置顶、最近打开、全局搜索快捷键、命令面板、键盘快捷键。**编辑器本体属 P6**（Milkdown/CodeMirror），P5 的编辑面先用简单文本域。
-7. **解锁与登录界面**：把 `KeyStore` 与 `GET /key-material` 接起来（P4 只交付了底座）。
+1. **客户端数据层**：Dexie 仓储（加密后写入）、把每次改动 `enqueueChange` 入队。
+2. **搜索（§11）**：解锁后在内存用 MiniSearch 建索引（标题/正文/标签/文件夹/附件信息），精确 + 模糊 + 高亮，**索引绝不持久化**。
+3. **UI（用户明确要求 P5 一并交付）**：三栏布局（文件夹/标签 | 列表 | 编辑器）、排序（最近修改/创建时间/标题/手动）、置顶、最近打开、全局搜索快捷键、命令面板、键盘快捷键。**编辑器本体属 P6**（Milkdown/CodeMirror），P5 的编辑面先用简单文本域。
+4. **解锁与登录界面**：把 `KeyStore` 与 `GET /key-material` 接起来（P4 只交付了底座）。
 
 ### 16.3 提示下一会话
 
