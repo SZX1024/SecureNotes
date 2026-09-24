@@ -690,7 +690,25 @@ VITE_API_TARGET=http://127.0.0.1:8791 pnpm dev:web      # http://localhost:5173
 
 1. **编辑器本体**：Milkdown WYSIWYG + CodeMirror 6 源码模式（移动端默认 WYSIWYG）、语法高亮（Shiki）、动画 GIF/WebP 保留。
 2. **未知 Markdown 扩展的 round-trip**（需求要求先写 round-trip 测试再实现）。
-3. **KaTeX 与 Mermaid 依赖接入**：Mermaid 需确认不需要 `unsafe-eval`（若需要，与 §13 冲突，必须先停下来讨论）；KaTeX 用 `trust: false`。
+3. **KaTeX 与 Mermaid 依赖接入**：Mermaid **已实测不需要 `unsafe-eval`**（见 §19.5），CSP 保持严格；KaTeX 用 `trust: false`。
 4. **粘贴/拖放**：富文本网页粘贴的提示与安全转换路径；剪贴板图片立即创建附件并插入内部附件 ID；拖放仅接受图片、>20MB 拒绝。
 5. **附件引用 UI**（引用计数/归零异步删除的服务端已就绪）。
 6. `manifest.webmanifest` 真实图标、主题手动切换（跟随系统/亮/暗）——P5 遗留项。
+
+### 19.5 Mermaid 的 CSP 问题：已实测，**不需要 `unsafe-eval`**
+
+我曾提示「Mermaid 可能需要 `'unsafe-eval'`，那会与 §13 冲突」。**这是猜测，不是事实**，所以我先测了：
+
+| 检查                                                                     | 结果                                                              |
+| ------------------------------------------------------------------------ | ----------------------------------------------------------------- |
+| 整个 Mermaid 12 bundle 里 `new Function(` / `eval(` 出现次数             | **0 / 0**                                                         |
+| 把 `Function` 构造器替换为「调用即抛错」的 Proxy 后，逐个解析 8 种图类型 | **0 次违约**                                                      |
+| 在同样污染下渲染无布局依赖的图（pie）                                    | 成功产出 SVG                                                      |
+| 该 SVG 再过一遍 `sanitizeSvg`                                            | 无活动内容（§12 的 `Markdown → Mermaid → SVG → 净化 → DOM` 成立） |
+
+**结论：CSP 不放宽** `script-src 'self'`（无 inline、无 eval），§13 保全。
+新增守卫测试 `apps/web/src/render/mermaid-csp.test.ts`：**静态审计** Mermaid 的整个 `dist`（读取每个 `.mjs`/`.js`，断言无 `new Function(`/`eval(`，并断言实际扫描量 > 500KB，避免目录变动时「静默通过」）。一旦未来升级引入这些构造器，测试**直接失败**，而不是让 CSP 因为「图渲染不出来」被悄悄放宽。
+
+**一次自我纠错值得记录**：这个守卫的第一版是在运行时把 `globalThis.Function` 换成「调用即抛错」的 Proxy，然后断言 0 次违约。我给它加了自检（断言污染确实生效），结果自检**失败**——替换根本没生效，也就是说那版守卫**无论 Mermaid 做什么都会通过**。**不会失败的守卫比没有守卫更糟，因为它会被相信**。因此改为静态审计。
+
+（jsdom 没有布局引擎，flowchart 等类型会因 `getBBox` 缺失而无法渲染——那是渲染限制，与 script 策略无关；因此广度用 `parse` 覆盖，实际 `render` 只取无布局依赖的类型。）

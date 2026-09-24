@@ -242,3 +242,16 @@ Tracked here until decided; none of them block P0.
   `default-src 'none'`; the shell needs inline _styles_ (KaTeX, Mermaid, sanitised
   `style` attributes) and HTTPS frames, so it gets a policy that names them while
   `script-src` stays `'self'` with no `'unsafe-inline'` and no `'unsafe-eval'`.
+
+- **Mermaid does not get `'unsafe-eval'`, and that was measured, not assumed.** §13
+  forbids weakening CSP to permit arbitrary script execution, so before touching the
+  policy I checked the claim: the whole Mermaid 12 bundle contains zero occurrences
+  of `new Function(` and `eval(`, and every diagram type parses and renders under the
+  application sanitizer. So `script-src 'self'` stands.
+  The guard is a **static audit of the shipped bundle**, not a runtime patch. The
+  first version replaced `globalThis.Function` with a throwing proxy and asserted no
+  violations — and its own self-check proved the replacement never took effect, so it
+  would have passed no matter what Mermaid did. A guard that cannot fail is worse
+  than none, because it is believed. The audit reads every `.mjs`/`.js` file under
+  Mermaid's `dist`, asserts the constructors are absent, and asserts how much source
+  it actually scanned so a moved directory fails instead of passing silently.
