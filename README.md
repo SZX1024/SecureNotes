@@ -85,8 +85,8 @@ CI runs the same command on every push and pull request (`.github/workflows/ci.y
 | Phase | Scope                                                                         | State |
 | ----- | ----------------------------------------------------------------------------- | ----- |
 | P0    | Scaffolding: workspace, worker skeleton, client shell, tests, documentation   | done  |
-| P1    | D1 schema and migrations for all core tables                                  | next  |
-| P2    | Auth: enrolment, TOTP login, recovery codes, sessions, rate limiting, audit   |       |
+| P1    | D1 schema and migrations for all core tables                                  | done  |
+| P2    | Auth: enrolment, TOTP login, recovery codes, sessions, rate limiting, audit   | next  |
 | P3    | Crypto: key hierarchy, envelope, recovery wrapping, TOTP rebind migration     |       |
 | P4    | Local layer: IndexedDB migrations, device key, App Lock, PWA shell            |       |
 | P5    | Data: notes, folders, tags, revisions, recycle bin, attachments, search       |       |
@@ -98,6 +98,7 @@ CI runs the same command on every push and pull request (`.github/workflows/ci.y
 ## Documentation
 
 - [Architecture](./docs/architecture.md) — trust boundary, request flow, module map
+- [Database schema](./docs/schema.md) — tables, conventions, migrations, deploy prerequisites
 - [Cryptographic format](./docs/crypto-format.md) — envelope, AAD, key hierarchy, migration
 - [API contract](./docs/api-contract.md) — envelope, error codes, endpoints
 - [Threat model](./docs/threat-model.md) — what is defended, what is explicitly accepted

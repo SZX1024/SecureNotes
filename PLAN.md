@@ -98,7 +98,7 @@ SecureNotes/
 | 阶段 | 范围                                                              | 完成判据                                                                         |
 | ---- | ----------------------------------------------------------------- | -------------------------------------------------------------------------------- |
 | P0   | 脚手架：workspace、Worker 骨架、客户端外壳、质量链路、文档        | ✅ **已完成**（`pnpm check` 全绿 + 构建成功 + 健康检查端到端可达 + 首个 commit） |
-| P1   | D1 schema 与迁移（14 张表 + 限流表）                              | 本地迁移可跑通、外键/索引生效、schema 测试通过                                   |
+| P1   | D1 schema 与迁移（14 张表 + 限流表）                              | ✅ **已完成**（本地迁移跑通 + 外键/索引生效 + 23 个 schema 测试通过）            |
 | P2   | 认证域（初始化/TOTP/恢复码/会话/限流/审计/CSRF）                  | 需求 §32「Authentication」全部勾选 + 对应安全测试                                |
 | P3   | 加密域（信封/AAD/密钥层级/恢复包裹/换绑迁移）                     | 需求 §32「Encryption」全部勾选，含迁移中断续跑与回滚                             |
 | P4   | 本地层（Dexie 迁移、设备密钥、App Lock、PWA/SW、静态资源绑定）    | 需求 §32「Offline」「Platform」相关项勾选                                        |
@@ -163,14 +163,16 @@ pnpm format    # 应用 Prettier
 - [x] 首个 commit：`chore: scaffold SecureNotes monorepo (P0)`
 - [x] 向用户汇报 P0 结果并暂停
 
-## P1 D1 schema 与迁移
+## P1 D1 schema 与迁移（已完成 ✅ 2026-09-24）
 
-- [ ] `migrations/0001_init.sql`：users、sessions、recovery_codes、totp_config、folders、tags、notes、note_revisions、note_tags、attachments、note_attachments、sync_changes、audit_logs、rate_limits
-- [ ] 外键 + 索引（含唯一约束、`notes(id, revision)` 乐观锁所需索引、tombstone/cursor 索引）
-- [ ] `notes` 更新使用 `WHERE id=? AND revision=?` 原子条件；受影响行数为 0 视为冲突
-- [ ] 迁移工具链：`wrangler d1 migrations` 本地应用；测试侧用 `readD1Migrations` 注入
-- [ ] schema 测试：约束生效、级联行为、索引存在
-- [ ] 记录 `database_id` 占位符替换说明（部署前）
+- [x] `migrations/0001_init.sql`：users、sessions、recovery_codes、totp_config、folders、tags、notes、note_revisions、note_tags、attachments、note_attachments、sync_changes、audit_logs、rate_limits（14 张表，37 条语句）
+- [x] 外键 + 索引（含唯一约束、tombstone/cursor 索引）。**关于 `notes(id, revision)` 索引：未新增**——`id` 已是主键，§27 的原子条件本身就是单行主键查找，额外索引只会增加写开销；理由见 `docs/schema.md`「Recorded interpretations」第 4 条
+- [x] `notes` 更新使用 `WHERE id=? AND revision=?` 原子条件；`meta.changes === 0` 视为冲突（有测试覆盖）
+- [x] 迁移工具链：`wrangler d1 migrations apply securenotes-db --local` 本地跑通；测试侧用 `readD1Migrations` + `applyD1Migrations` 注入同一批 SQL 文件
+- [x] schema 测试：表/索引清单、外键级联与 RESTRICT 行为、CHECK 约束、UNIQUE 约束、AUTOINCREMENT 游标不复用、乐观锁、附件引用计数（23 个测试）
+- [x] 记录 `database_id` 占位符替换说明（部署前）→ `docs/schema.md`「Before the first deploy」
+
+**遗留到后续阶段（必须用新迁移，不得改 0001）**：P3 的 TOTP 换绑 pending 列与一次性 nonce 表、P7 的冲突状态表；D1 单行大小上限对「超大笔记」的限制也已记录在 `docs/schema.md`。
 
 ## P2 认证域
 

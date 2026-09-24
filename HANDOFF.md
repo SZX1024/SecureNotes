@@ -178,17 +178,17 @@ P0 完成判据：`pnpm check` 全绿 + 构建成功 + 两处 `/api/v1/health` �
 
 ## 8. 后续阶段计划（需求 §30，每阶段结束暂停汇报）
 
-| 阶段 | 范围             | 关键交付                                                                                                                                                                                                                                                            |
-| ---- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| P1   | D1 schema 与迁移 | 0001 迁移：users/sessions/recovery_codes/totp_config/folders/tags/notes/note_revisions/note_tags/attachments/note_attachments/sync_changes/audit_logs（+ 限流表）；外键、索引、事务；`wrangler d1 migrations` 本地跑通；worker 测试改为读迁移（`readD1Migrations`） |
-| P2   | 认证域           | 首运行初始化（用户名+TOTP+10 恢复码）、登录/恢复登录、会话（UUIDv7 + 256bit token 只存 SHA-256、40 分钟滑动过期、5 会话上限+淘汰、设备列表、撤销）、限流与指数退避、审计日志（30 天 Cron 清理、敏感字段加密、IP 截断）、CSRF/Origin 强校验、统一错误与请求体限制    |
-| P3   | 加密域           | 客户端信封加密/AAD/HKDF/KEK-DEK、恢复码包裹、TOTP 换绑迁移状态机（可中断续跑/可回滚）、一次性 operation id/nonce                                                                                                                                                    |
-| P4   | 本地层           | Dexie schema 与版本化迁移（保留旧库直到成功）、设备密钥 + 包裹 DEK、App Lock 40 分钟、PWA/SW 骨架 + 静态资源绑定接入 Worker（`[assets]`）                                                                                                                           |
-| P5   | 数据域           | notes/folders/tags/revisions/recycle bin/attachments（引用计数 + 异步 R2 删除）/搜索（MiniSearch 内存索引）                                                                                                                                                         |
-| P6   | 编辑器           | Milkdown WYSIWYG + CodeMirror 源码、DOMPurify HTML/SVG/CSS 策略、CSP（`frame-src https:`、`img-src https:`）、Mermaid→SVG 二次净化、KaTeX trust:false、iframe sandbox（**绝不允许 allow-same-origin**）、粘贴/拖放                                                  |
-| P7   | 同步             | cursor 增量、`base_revision` 乐观锁、三方冲突 Base/Local/Remote、Markdown 三方合并、重试退避、tombstone 30 天、同笔记串行/异笔记并行                                                                                                                                |
-| P8   | 导入导出         | 全量明文 ZIP 导出（fflate）、独立恢复包（版本化）、事务性导入（校验后提交、失败整体回滚）、SW 在有未同步数据时推迟更新                                                                                                                                              |
-| P9   | 安全加固         | 需求 §31 全部必测 + 需求 §32 验收清单逐项勾选与报告                                                                                                                                                                                                                 |
+| 阶段 | 范围             | 关键交付                                                                                                                                                                                                                                                         |
+| ---- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| P1   | D1 schema 与迁移 | ✅ **已完成**（见 §12）：14 张表 / 37 条语句；外键 + 索引 + CHECK；`wrangler d1 migrations` 本地跑通；测试改为读同一批迁移文件（`readD1Migrations`）                                                                                                             |
+| P2   | 认证域           | 首运行初始化（用户名+TOTP+10 恢复码）、登录/恢复登录、会话（UUIDv7 + 256bit token 只存 SHA-256、40 分钟滑动过期、5 会话上限+淘汰、设备列表、撤销）、限流与指数退避、审计日志（30 天 Cron 清理、敏感字段加密、IP 截断）、CSRF/Origin 强校验、统一错误与请求体限制 |
+| P3   | 加密域           | 客户端信封加密/AAD/HKDF/KEK-DEK、恢复码包裹、TOTP 换绑迁移状态机（可中断续跑/可回滚）、一次性 operation id/nonce                                                                                                                                                 |
+| P4   | 本地层           | Dexie schema 与版本化迁移（保留旧库直到成功）、设备密钥 + 包裹 DEK、App Lock 40 分钟、PWA/SW 骨架 + 静态资源绑定接入 Worker（`[assets]`）                                                                                                                        |
+| P5   | 数据域           | notes/folders/tags/revisions/recycle bin/attachments（引用计数 + 异步 R2 删除）/搜索（MiniSearch 内存索引）                                                                                                                                                      |
+| P6   | 编辑器           | Milkdown WYSIWYG + CodeMirror 源码、DOMPurify HTML/SVG/CSS 策略、CSP（`frame-src https:`、`img-src https:`）、Mermaid→SVG 二次净化、KaTeX trust:false、iframe sandbox（**绝不允许 allow-same-origin**）、粘贴/拖放                                               |
+| P7   | 同步             | cursor 增量、`base_revision` 乐观锁、三方冲突 Base/Local/Remote、Markdown 三方合并、重试退避、tombstone 30 天、同笔记串行/异笔记并行                                                                                                                             |
+| P8   | 导入导出         | 全量明文 ZIP 导出（fflate）、独立恢复包（版本化）、事务性导入（校验后提交、失败整体回滚）、SW 在有未同步数据时推迟更新                                                                                                                                           |
+| P9   | 安全加固         | 需求 §31 全部必测 + 需求 §32 验收清单逐项勾选与报告                                                                                                                                                                                                              |
 
 ## 9. 待决问题（见 `docs/decisions.md`，不阻塞 P0）
 
@@ -272,3 +272,53 @@ Hono 的 `app.route()` 会把子应用路由**摊平**进父路由表，匹配�
 - `apps/web/vite.config.ts` 里 `build.sourcemap: true`：会把前端源码映射发布到生产。前端代码本身是
   开源的、不含秘密，故不构成密钥泄露；但如需收紧，P4/P9 可改为 `false` 或只上传到错误追踪系统。
 - `pnpm check` 运行期间偶发 `EROFS` 写 wrangler 日志的警告（不影响退出码 0）；配合 §11.2 的 `HOME` 方案可消除。
+
+## 12. P1 完成记录（D1 schema 与迁移，本次）
+
+### 12.1 交付物
+
+| 文件                                   | 内容                                                                                                                                     |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/worker/migrations/0001_init.sql` | 14 张表、21 个索引、37 条语句（§9 的 13 张表 + `rate_limits`）                                                                           |
+| `apps/worker/vitest.config.ts`         | 用 `readD1Migrations("./migrations")` 把**同一批** SQL 文件注入 `TEST_MIGRATIONS` 绑定；`setupFiles` 指向下面的应用脚本                  |
+| `apps/worker/test/apply-migrations.ts` | 每个测试文件用 `applyD1Migrations(env.DB, TEST_MIGRATIONS)` 建库（`TEST_MIGRATIONS` 只在测试期存在，故在本地收窄类型，不污染生产 `Env`） |
+| `apps/worker/test/schema.test.ts`      | 23 个 schema 测试                                                                                                                        |
+| `docs/schema.md`                       | 约定、逐表说明、**7 条解释性决策**、迁移流程、部署前置（`database_id` 替换）、后续阶段延迟项                                             |
+
+### 12.2 关键约定（P2 起写 SQL 必须遵守）
+
+- id：`TEXT` UUIDv7（满足 AAD 字符集 `[A-Za-z0-9_-]{1,64}`）。
+- 时间戳：`INTEGER` epoch 毫秒，**由应用提供**，无 `DEFAULT`。
+- 加密对象：显式 `crypto_version` / `key_version` / `iv` / `ciphertext` 列（base64，`ciphertext` 含 16 字节 GCM tag），不用 JSON blob。
+- 校验摘要（session token、恢复码）：小写 hex `TEXT(64)` + `CHECK(length=64)`。它们是高熵随机值的摘要，**不是**用户口令，故不需要慢 KDF。
+- **未使用 `STRICT` 表**：沙箱无 Cloudflare 账号，无法对真实 D1 验证运行期专有 DDL；改用可移植的 `CHECK`（本地已验证）。
+- **未使用触发器**：迁移 SQL 分割器是语句级的，跨表不变量由应用事务 + 测试保证。
+
+### 12.3 本次遇到并已修正的问题
+
+1. **漏建 `note_tags` 表**：首版只写了 13 张表（把 `note_tags` 与 `note_attachments` 混为一谈），`sqlite_master` 清点后发现只有 13 张 → 已补 `note_tags`（`note_id`/`tag_id` 双 `CASCADE`，删除标签只删关系）。
+2. **测试辅助函数返回 `D1PreparedStatement` 而未 `.run()`**：`await helper()` 对非 Promise 是空操作，导致 15 个测试因「外键失败」而挂（用户不存在）。已改为 `create*` 辅助函数**直接执行**，另设 `*Statement` 仅用于需要进 `DB.batch()` 事务的少数场景。
+3. **本地 D1 状态目录**：在 `apps/worker/.wrangler/state`（**不是**仓库根 `.wrangler`）。清理后重跑迁移要用这个路径。
+
+### 12.4 已确认的数据库行为（实测，非推测）
+
+- 外键**确实被强制**：插入孤儿行报 `FOREIGN KEY constraint failed`。
+- `CHECK` **确实被强制**：如 `depth=11` 报 `CHECK constraint failed: depth >= 1 AND depth <= 10`。
+- 删除 `users` 行会**完整级联**（含 folders + notes + revisions + tags + links + attachments + totp_config + sync_changes），即使 `notes.folder_id` 是 `RESTRICT` 也不会互相卡死（已实测）。
+- 单行 `DELETE FROM folders` 在仍有子文件夹或子笔记时**被 RESTRICT 拒绝**（符合设计：迫使清理路径显式、有序）。
+- 乐观锁：`WHERE id=? AND revision=?` 命中时 `meta.changes = 1`，基数过期时 `= 0`（§27 的判据就是 `changes === 0` → 冲突）。
+
+### 12.5 未决/需用户确认的解释性决策
+
+`docs/schema.md`「Recorded interpretations」共 7 条，其中会影响用户体验、值得用户点头的是：
+
+- **`notes.folder_id` 可为 NULL**，表示「根/未归档」，而不是强制「笔记必须永远属于某个文件夹」。理由：避免首次运行的先有文件夹还是先有笔记的循环，且回收站里原文件夹被永久删除后笔记需要落点。
+- **当前修订在 `notes` 与 `note_revisions` 各存一份**（§9 同时要求「notes 存加密 Markdown」与「保留当前修订 + 最多 10 个历史版本」）；两处必须同事务写入，已用测试锁住不变量。
+- **未新增 `notes(id, revision)` 索引**（PLAN 原文提到过）：`id` 已是主键，§27 的条件本身就是单行主键查找，额外索引只增加写开销。
+- **`totp_config.last_used_step`**：拒绝同一时间步内重复使用的 TOTP 码（RFC 6238 §5.2）。代价是 30 秒窗口内第二次登录会失败（例如刚登录第二个设备）。如需放宽请告知。
+
+### 12.6 下一步（P2 认证域）
+
+- `docs/schema.md` 的「Deferred to later phases」列出 P3/P7 需要的新迁移；**不得修改已应用的 `0001_init.sql`**。
+- P2 开工即会用到的表：`users`（`failed_auth_count` / `auth_backoff_until`）、`totp_config`（`last_used_step`）、`sessions`、`recovery_codes`、`audit_logs`、`rate_limits`。
+- 注意 §11.2：跑任何 `wrangler dev` / `d1 execute` 前先设 `HOME="$PWD/.sandbox-home"`。
