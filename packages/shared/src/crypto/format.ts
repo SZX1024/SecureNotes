@@ -137,6 +137,8 @@ export function canonicalAad(input: AadInput): string {
  *
  * UTF-8 is guaranteed to be byte-identical in the browser and in workerd.
  */
-export function buildAad(input: AadInput): Uint8Array {
-  return new TextEncoder().encode(canonicalAad(input));
+export function buildAad(input: AadInput): Uint8Array<ArrayBuffer> {
+  // Copied into a fresh ArrayBuffer-backed view: WebCrypto's BufferSource does
+  // not accept a SharedArrayBuffer-backed one.
+  return new Uint8Array(new TextEncoder().encode(canonicalAad(input)));
 }

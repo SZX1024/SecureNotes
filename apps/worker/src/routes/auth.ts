@@ -13,6 +13,7 @@ import { applyClearedSessionCookies, applySessionCookies } from "../lib/cookies"
 import { jsonOk } from "../lib/http";
 import { authBodyGuard, parseJsonBody } from "../middleware/guards";
 import { requireCsrf, requireSession } from "../middleware/session";
+import { readPendingSecretBase32 } from "../services/totp-rebind";
 import {
   USERNAME_PATTERN,
   getAccount,
@@ -137,6 +138,13 @@ function keyMaterialPresent(account: Account): boolean {
   return account.wrappedDekIv !== null && account.wrappedDekCiphertext !== null;
 }
 
+async function readRebindState(env: Env, userId: string): Promise<string> {
+  const row = await env.DB.prepare("SELECT rebind_state AS s FROM totp_config WHERE user_id = ?1")
+    .bind(userId)
+    .first<string>("s");
+  return row ?? "idle";
+}
+
 authRoutes.get("/auth/status", async (c) => {
   const account = await getAccount(c.env);
   return jsonOk({ initialized: account !== null });
@@ -171,7 +179,10 @@ authRoutes.post("/auth/setup", authBodyGuard(), async (c) => {
   );
 
   return jsonOk({
+    userId: result.account.id,
     username: result.account.username,
+    kdfSalt: result.account.kdfSalt,
+    keyVersion: result.account.keyVersion,
     totpSecret: result.totpSecretBase32,
     totpUri: result.totpUri,
     recoveryCodes: result.recoveryCodes,
@@ -274,10 +285,17 @@ authRoutes.post("/auth/login", authBodyGuard(), async (c) => {
   return applySessionCookies(
     jsonOk({
       ...sessionPayload(created.session, created.csrfToken),
+      userId: account.id,
       username: account.username,
+      kdfSalt: account.kdfSalt,
       keyMaterialPresent: keyMaterialPresent(account),
+      keyVersion: account.keyVersion,
       // ADR-002: delivered over HTTPS to derive the KEK. Memory-only on the client.
       totpSecret: await readTotpSecretBase32(c.env, account.id),
+      // Present only while a rebind is mid-flight, so an interrupted migration
+      // can be resumed without the user re-enrolling.
+      pendingTotpSecret: await readPendingSecretBase32(c.env, account.id),
+      rebindState: await readRebindState(c.env, account.id),
     }),
     {
       token: created.token,
@@ -367,7 +385,10 @@ authRoutes.post("/auth/recovery", authBodyGuard(), async (c) => {
   return applySessionCookies(
     jsonOk({
       ...sessionPayload(created.session, created.csrfToken),
+      userId: account.id,
       username: account.username,
+      kdfSalt: account.kdfSalt,
+      keyVersion: account.keyVersion,
       keyMaterialPresent: keyMaterialPresent(account),
       // §3: the user is prompted to reconfigure TOTP after a recovery login.
       mustRebindTotp: true,
@@ -424,7 +445,10 @@ authRoutes.get("/auth/session", async (c) => {
 
   return jsonOk({
     authenticated: true,
+    userId: account.id,
     username: account.username,
+    kdfSalt: account.kdfSalt,
+    keyVersion: account.keyVersion,
     keyMaterialPresent: keyMaterialPresent(account),
     session: {
       id: session.id,

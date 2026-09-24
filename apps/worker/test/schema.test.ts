@@ -29,6 +29,7 @@ const TABLES = [
   "note_revisions",
   "note_tags",
   "notes",
+  "operation_nonces",
   "rate_limits",
   "recovery_codes",
   "sessions",

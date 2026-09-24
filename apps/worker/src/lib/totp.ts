@@ -1,4 +1,9 @@
-import { TOTP_DIGITS, TOTP_PERIOD_SECONDS, TOTP_SECRET_BYTES } from "@securenotes/shared";
+import {
+  TOTP_DIGITS,
+  TOTP_PERIOD_SECONDS,
+  TOTP_SECRET_BYTES,
+  type Bytes,
+} from "@securenotes/shared";
 
 import { base32Encode } from "./base32";
 import { hmac, randomBytes } from "./crypto";
@@ -11,7 +16,7 @@ import { hmac, randomBytes } from "./crypto";
  */
 
 /** A fresh 160-bit secret, shown once as a QR code. */
-export function generateTotpSecret(): { bytes: Uint8Array; base32: string } {
+export function generateTotpSecret(): { bytes: Bytes; base32: string } {
   const bytes = randomBytes(TOTP_SECRET_BYTES);
   return { bytes, base32: base32Encode(bytes) };
 }
@@ -21,7 +26,7 @@ export function totpStep(nowMs: number): number {
   return Math.floor(nowMs / 1000 / TOTP_PERIOD_SECONDS);
 }
 
-export async function generateTotpCode(secret: Uint8Array, step: number): Promise<string> {
+export async function generateTotpCode(secret: Bytes, step: number): Promise<string> {
   const counter = new Uint8Array(8);
   let remaining = step;
   for (let index = 7; index >= 0; index -= 1) {
@@ -51,7 +56,7 @@ export async function generateTotpCode(secret: Uint8Array, step: number): Promis
  * what makes replay impossible rather than merely expensive.
  */
 export async function verifyTotpCode(
-  secret: Uint8Array,
+  secret: Bytes,
   submittedCode: string,
   nowMs: number,
   options: { lastUsedStep?: number | null; windowSteps?: number } = {},

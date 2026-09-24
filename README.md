@@ -102,8 +102,8 @@ CI runs the same command on every push and pull request (`.github/workflows/ci.y
 | P0    | Scaffolding: workspace, worker skeleton, client shell, tests, documentation   | done  |
 | P1    | D1 schema and migrations for all core tables                                  | done  |
 | P2    | Auth: enrolment, TOTP login, recovery codes, sessions, rate limiting, audit   | done  |
-| P3    | Crypto: key hierarchy, envelope, recovery wrapping, TOTP rebind migration     | next  |
-| P4    | Local layer: IndexedDB migrations, device key, App Lock, PWA shell            |       |
+| P3    | Crypto: key hierarchy, envelope, recovery wrapping, TOTP rebind migration     | done  |
+| P4    | Local layer: IndexedDB migrations, device key, App Lock, PWA shell            | next  |
 | P5    | Data: notes, folders, tags, revisions, recycle bin, attachments, search       |       |
 | P6    | Editor: WYSIWYG, source mode, sanitisation, CSP, Mermaid, KaTeX, SVG, iframes |       |
 | P7    | Sync: cursor, optimistic locking, conflict merge UI, retry, tombstones        |       |

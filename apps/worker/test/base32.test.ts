@@ -1,3 +1,4 @@
+import { utf8 } from "@securenotes/shared";
 import { describe, expect, it } from "vitest";
 
 import { base32Decode, base32Encode } from "../src/lib/base32";
@@ -16,7 +17,7 @@ const RFC_VECTORS: ReadonlyArray<readonly [string, string]> = [
 describe("base32", () => {
   it("matches the RFC 4648 vectors when encoding", () => {
     for (const [plain, encoded] of RFC_VECTORS) {
-      expect(base32Encode(new TextEncoder().encode(plain)), `encode(${plain})`).toBe(encoded);
+      expect(base32Encode(utf8(plain)), `encode(${plain})`).toBe(encoded);
     }
   });
 

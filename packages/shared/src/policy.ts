@@ -70,3 +70,16 @@ export const AUTH_ATTEMPTS_PER_IP_PER_HOUR = 30;
 export const AUTH_ATTEMPTS_GLOBAL_PER_HOUR = 300;
 export const AUTH_BACKOFF_BASE_MS = 1000;
 export const AUTH_BACKOFF_CAP_MS = 60 * 1000;
+
+/**
+ * §26 one-time operation ids: bound to the user and session that requested them
+ * and valid for a short window. Five minutes is long enough to complete a
+ * re-wrap on a slow connection and short enough that a leaked nonce is useless.
+ */
+export const OPERATION_NONCE_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * §3 TOTP rebind: an abandoned rebind must not leave a second usable secret
+ * behind, so the pending secret expires and is discarded.
+ */
+export const REBIND_TTL_MS = 15 * 60 * 1000;

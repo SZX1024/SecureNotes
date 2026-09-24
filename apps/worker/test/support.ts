@@ -116,10 +116,14 @@ export function cookieJarFrom(setCookies: string[], csrfFallback?: string): Cook
 }
 
 export interface EnrolmentData {
+  userId: string;
   username: string;
+  kdfSalt: string;
+  keyVersion: number;
   totpSecret: string;
   totpUri: string;
-  recoveryCodes: string[];
+  /** Each code travels with its public HKDF salt, needed to build its wrapping. */
+  recoveryCodes: Array<{ code: string; salt: string }>;
   recoveryCodesShownOnce: boolean;
 }
 
@@ -137,9 +141,16 @@ export interface SessionDto {
 export interface LoginData {
   session: SessionDto;
   csrfToken: string;
+  /** The client needs its own id and salt to build the wrapped-DEK AAD. */
+  userId: string;
   username: string;
+  kdfSalt: string;
+  keyVersion: number;
   keyMaterialPresent: boolean;
   totpSecret?: string | null;
+  /** Only while a rebind is mid-flight, so a migration can be resumed. */
+  pendingTotpSecret?: string | null;
+  rebindState?: string;
   mustRebindTotp?: boolean;
   revokedOtherSessions?: number;
 }
@@ -151,7 +162,7 @@ export interface SessionListEntry extends SessionDto {
 export interface TestAccount {
   username: string;
   totpSecret: string;
-  recoveryCodes: string[];
+  recoveryCodes: Array<{ code: string; salt: string }>;
 }
 
 /** Enrols the single account once per test file. */

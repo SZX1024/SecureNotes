@@ -145,3 +145,32 @@ Tracked here until decided; none of them block P0.
 - **`getAccount` orders by rowid.** The schema holds exactly one account, but ordering by
   the caller-supplied `created_at` let a row with a smaller timestamp shadow the real
   account. Insertion order is the deterministic, non-forgeable tiebreaker.
+
+## P3 decisions (encryption)
+
+- **One implementation of base32 and the byte primitives.** They moved into
+  `@securenotes/shared` and the worker re-exports them. Two decoders that
+  disagree by one character would silently derive a different KEK, and the client
+  and the worker must agree byte for byte.
+- **Wrapped key material uses the frozen AAD**, with the `user_key_material`
+  object type and the account id as the object id. That required the API to
+  return `userId` and `kdfSalt`, both of which are identifiers rather than
+  secrets.
+- **The DEK is never extractable in memory.** It exists as raw bytes only while
+  it is being wrapped or unwrapped; what the app keeps is a non-extractable
+  AES-GCM `CryptoKey` (§7).
+- **`token_hash`-style storage does not apply to key material.** The server
+  stores envelopes it cannot open; validation is limited to shape, version and
+  completeness, which is the trust boundary in the threat model.
+- **The rebind is four endpoints, not two.** §15 lists start/verify, but §3 also
+  requires revoking all sessions _and_ migrating data client-side. Revoking every
+  session at `verify` would destroy the session the migration needs, so sessions
+  are revoked at `verify` (all except the current one) and at `complete` (all).
+  §15 explicitly permits this refinement.
+- **Both secrets are returned during the rebind window only.** The new one
+  derives the new KEK; the old one unwraps the DEK that is still protected by it.
+  This is what makes an interrupted migration resumable, and both are retired at
+  `complete`.
+- **Recovery codes are returned once as `{code, salt}`.** The per-code salt is
+  public and already stored server-side; without it the client cannot build the
+  recovery wrapping.

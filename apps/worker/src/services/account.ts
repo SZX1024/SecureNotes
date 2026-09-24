@@ -2,6 +2,8 @@ import { RECOVERY_CODE_COUNT, RECOVERY_CODE_LENGTH } from "@securenotes/shared";
 
 import type { Env } from "../env";
 import { base32Encode } from "../lib/base32";
+import type { Bytes } from "@securenotes/shared";
+
 import { bytesToBase64, randomBytes, sha256Hex, uuidv7 } from "../lib/crypto";
 import { openSecret, sealSecret } from "../lib/secret-box";
 import { buildTotpUri, generateTotpSecret, verifyTotpCode } from "../lib/totp";
@@ -91,8 +93,14 @@ export interface EnrolmentResult {
   /** Shown once as a QR code; never retrievable through the UI afterwards. */
   totpSecretBase32: string;
   totpUri: string;
-  /** Shown once. Only digests are stored from here on. */
-  recoveryCodes: string[];
+  /**
+   * Shown once. Only digests are stored from here on.
+   *
+   * Each entry carries the code's public HKDF salt, which the client needs to
+   * derive that code's recovery KEK and wrap the DEK under it. The salt is not
+   * secret; the code's 160 bits of entropy are what protect the wrapping.
+   */
+  recoveryCodes: Array<{ code: string; salt: string }>;
 }
 
 /**
@@ -116,15 +124,18 @@ export async function initializeAccount(
   const totp = generateTotpSecret();
   const sealedTotp = await sealSecret(env.SECRET_WRAP_KEY, "totp-secret", totp.bytes);
 
-  const recoveryCodes = Array.from({ length: RECOVERY_CODE_COUNT }, () => generateRecoveryCode());
   const codeRows = await Promise.all(
-    recoveryCodes.map(async (code) => ({
-      id: uuidv7(nowMs, randomBytes(10)),
-      hash: await sha256Hex(code),
-      // Per-code HKDF salt for the recovery KEK; generated here because it is
-      // public, while the wrapping itself arrives with the client's key setup.
-      salt: bytesToBase64(randomBytes(16)),
-    })),
+    Array.from({ length: RECOVERY_CODE_COUNT }, async () => {
+      const code = generateRecoveryCode();
+      return {
+        id: uuidv7(nowMs, randomBytes(10)),
+        code,
+        hash: await sha256Hex(code),
+        // Per-code HKDF salt for the recovery KEK; generated here because it is
+        // public, while the wrapping itself arrives with the client's key setup.
+        salt: bytesToBase64(randomBytes(16)),
+      };
+    }),
   );
 
   await env.DB.batch([
@@ -161,7 +172,7 @@ export async function initializeAccount(
     account,
     totpSecretBase32: totp.base32,
     totpUri: buildTotpUri(totp.base32, username),
-    recoveryCodes,
+    recoveryCodes: codeRows.map((row) => ({ code: row.code, salt: row.salt })),
   };
 }
 
@@ -219,7 +230,7 @@ export async function verifyTotpCredentials(
     return { kind: "invalid" };
   }
 
-  let secret: Uint8Array;
+  let secret: Bytes;
   try {
     secret = await openSecret(env.SECRET_WRAP_KEY, "totp-secret", {
       iv: config.secret_iv,

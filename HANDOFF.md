@@ -396,3 +396,50 @@ logout 带 CSRF   → 200，2 个 Cookie 被清除（Max-Age=0）
 这一步专门验证了 13.2 第 1 条的 Cookie 修复在真实运行时的确生效（这是测试桩**无法**覆盖的失败模式：
 `SELF.fetch` 与真实 `wrangler dev` 在 Cookie 头重建路径上行为一致，但只有真实链路能证明最终
 客户端确实收到 `Set-Cookie`）。
+
+## 14. P3 完成记录（加密域，本次）
+
+### 14.1 交付物
+
+| 文件                                                                                                | 内容                                                                                                                                                                                                 |
+| --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/shared/src/crypto/bytes.ts`                                                               | 纯字节原语（UTF-8、hex/base64、CSPRNG、SHA-256、常数时间比较、`concatBytes`、`wipe`）+ **`Bytes` 类型别名**                                                                                          |
+| `packages/shared/src/crypto/base32.ts`                                                              | RFC 4648 base32 唯一实现（worker 改为**再导出**，不再各写一份）                                                                                                                                      |
+| `packages/shared/src/crypto/envelope.ts`                                                            | 信封加解密：`encryptObject` / `decryptObject` / `parseEnvelope` / `encryptJson` / `decryptJson`；AAD 复用冻结的 `buildAad`                                                                           |
+| `packages/shared/src/crypto/keys.ts`                                                                | 密钥层级：`deriveKek`（username ‖ 0x00 ‖ TOTP 密钥字节 + salt → HKDF）、`deriveRecoveryKek`、`generateDekRaw`、`importDek`（**不可导出**）、`wrapDek`/`unwrapDek`、`buildRecoveryWrappings`（10 份） |
+| `apps/worker/migrations/0002_key_material_and_nonces.sql`                                           | `operation_nonces` 表 + `totp_config` 的换绑状态机列（9 条语句）                                                                                                                                     |
+| `apps/worker/src/services/nonces.ts`                                                                | 一次性 nonce 的签发/核销/清理（**服务端签发**，绑定 user+session+operation，5 分钟）                                                                                                                 |
+| `apps/worker/src/services/key-material.ts`                                                          | 包裹 DEK 的存储与形状/版本/完整性校验（Zod + `parseEnvelope`）                                                                                                                                       |
+| `apps/worker/src/services/totp-rebind.ts`                                                           | 换绑状态机：`startRebind` / `verifyRebind` / `completeRebind` / `rollbackRebind` / `readPendingSecretBase32`                                                                                         |
+| `apps/worker/src/routes/security.ts`                                                                | 上述端点                                                                                                                                                                                             |
+| `packages/shared/test/crypto.test.ts`（20 测试）、`apps/worker/test/crypto-flow.test.ts`（15 测试） | 见 14.4                                                                                                                                                                                              |
+
+### 14.2 关键设计（P4+ 必须遵守）
+
+- **包裹 DEK 的 AAD** = 冻结 AAD，`object_type = user_key_material`，`object_id = 账户 id`，`revision = key_version`。因此 API 现在返回 `userId` 与 `kdfSalt`（setup/login/recovery/`GET /auth/session`），客户端才能自行构造 AAD。二者都不是秘密（§26：id 是标识符，不是授权）。
+- **DEK 在内存中不可导出**：原始字节只在包裹/解包的瞬间存在；随后只保留 non-extractable `CryptoKey`（§7）。
+- **恢复码下发格式变为 `[{ code, salt }]`**（原为 `string[]`）：客户端需要每个码的公开 salt 才能构造该码的恢复包裹。
+- **换绑是 4 个端点**（start/verify/complete/rollback），而 §15 只列了 2 个。原因：§3 要求「撤销全部会话」**且**「客户端迁移数据」；若在 verify 就撤销全部会话，迁移所需的会话会被自己销毁。故 verify 撤销**其他**会话，complete 撤销**全部**。§15 明确允许细化。
+- **换绑窗口内同时返回新旧两个 secret**：新 secret 派生新 KEK，旧 secret 用于解开仍由它保护的 DEK。这正是「可中断续跑」的实现方式；complete 后两者都被替换。登录响应在 `rebindState === 'rewrapping'` 时附带 `pendingTotpSecret`，供中断后恢复。
+- **换绑不重新加密任何笔记密文**（ADR-004）：DEK 不变，只重包裹 + 升 `key_version`。
+
+### 14.3 本次踩坑与修正（重要）
+
+1. **TS 6 的泛型 `Uint8Array` 与 WebCrypto `BufferSource` 不兼容**（`SharedArrayBuffer` 分支）。引入 `Bytes = Uint8Array<ArrayBuffer>` 别名，并在构造处（`utf8`/`buildAad`/`base32Decode`）确保落到普通 `ArrayBuffer`。**新增任何进入 `crypto.subtle` 的字节值都要用 `Bytes`。**
+2. **共享化时的真实回归**：我重写 `apps/worker/src/lib/crypto.ts` 时漏掉 `randomToken`，被 typecheck 立刻抓住。共享化已用 `pnpm -r typecheck` + 全量测试验证。
+3. **测试与真实客户端必须用同一套 AAD**：最初的测试用 `userId: ""` 自洽，掩盖了「客户端拿不到 user id」这个设计缺口。现在测试从登录响应取真实 `userId`/`kdfSalt`，缺口已补。
+4. 与 P2 的同类交互：故意失败的登录会**武装退避**，紧接着的成功登录会 429。测试中需显式让窗口过期（`UPDATE users SET auth_backoff_until = NULL`）。
+
+### 14.4 验证
+
+- `apps/worker` 145 测试、`packages/shared` 31 测试全绿；`pnpm check` exit 0。
+- **最强的一条**：`test/crypto-flow.test.ts` 用 `@securenotes/shared` 里**真实的客户端代码**跑完
+  注册 → 生成 DEK → KEK 包裹 → 上传 → 换绑（start/verify/complete）：断言旧 secret 登录被拒、新 secret 可登录、
+  会话全部撤销、`key_version` 升级、**用新 KEK 能还原出同一个 DEK**、**用恢复码也能还原出同一个 DEK**。
+- 迁移中断注入：verify 后模拟客户端崩溃 → 旧 secret 仍可登录且响应给出 `pendingTotpSecret` + `rebindState='rewrapping'` → 可继续或回滚。
+- 需求 §32「Encryption」12 项**已满足 7 项**（AES-256-GCM 正确、IV 唯一、AAD 校验、key_version 追踪、恢复可还原 DEK、换绑迁移数据、中断可续跑/回滚）；其余 5 项（明文不出端、文件夹/标签/标题正文/附件名加密）需要 P5/P6 的客户端与数据域才能端到端证明。
+
+### 14.5 延迟到后续阶段
+
+- `POST /recovery-codes/regenerate`（重新包裹 10 个恢复码）未实现——它需要「已登录 + 已解锁」的客户端流程，放在 P4/P5。
+- P4 需要：Dexie 存储、**不可导出设备密钥**包裹 DEK、App Lock 40 分钟、收到 401 时销毁本地密钥材料、启动时用 `GET /key-material` 解锁。

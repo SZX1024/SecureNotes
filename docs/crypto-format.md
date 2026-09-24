@@ -83,6 +83,25 @@ username + TOTP secret + fixed application context (KDF_CONTEXT) + per-account K
   direct consequence of the frozen hierarchy and is covered by the accepted risk in
   [the threat model](./threat-model.md) and requirements §25.
 
+## Wrapped key material
+
+A wrapped DEK is itself an envelope, and it is bound with the frozen AAD using
+the `user_key_material` object type:
+
+```text
+SecureNotes/v1|user_key_material|<account id>|<key_version>|<key_version>|<crypto_version>
+```
+
+`revision` is the key version because that is what changes on a rotation. The
+KEK wrapping and each of the ten recovery wrappings share this identity on
+purpose: they are distinct keys over the same secret, so swapping two wrappings
+can only cause a decryption failure, never a silent wrong plaintext.
+
+The client needs its own account id and KDF salt to build that AAD, so both are
+returned by `POST /auth/setup`, `POST /auth/login`, `POST /auth/recovery` and
+`GET /auth/session`. Neither is secret: an id is an identifier, never
+authorization (requirements §26).
+
 ## Recovery path
 
 Each of the 10 recovery codes has an independent wrapping:
@@ -131,6 +150,40 @@ Constraints: rebinding is refused while unsynced offline modifications exist; no
 editing is disabled during migration; the migration is resumable and the previous KEK
 wrapping is only deleted after the new one is confirmed, so an interruption can always
 roll back. Data preservation outranks migration speed.
+
+## One-time operation nonces (§26)
+
+Sensitive transitions — key-material upload, and every step of a TOTP rebind —
+require a nonce that the **server** issued, bound to the requesting user, the
+requesting session and one operation name, with a five-minute lifetime.
+Spending it is a conditional `UPDATE ... WHERE consumed_at IS NULL`, so two
+concurrent requests can never both succeed. A nonce is therefore not an
+idempotency key the client invents: it is a server-side grant that a replay
+cannot reuse.
+
+## TOTP rebind state machine
+
+```text
+idle --start--> awaiting_verification --verify--> rewrapping --complete--> idle
+                       |                              |                   (new key_version)
+                       +----------- rollback --------+
+```
+
+- `awaiting_verification`: a new secret exists as `pending_*`; the **old** secret
+  is still the active one and the QR has been shown.
+- `rewrapping`: the new secret was proven, so the client may re-wrap the DEK and
+  the ten recovery wrappings under the new KEK. The old secret is still stored,
+  and login keeps working with it, which is what makes an interrupted migration
+  resumable.
+- `complete` stores the new wrappings, promotes the pending secret, bumps
+  `key_version` and revokes every session — in one transaction, so there is no
+  instant at which the stored wrappings and the active secret disagree.
+- `rollback` discards the pending secret. It is always safe, because no stored
+  wrapping ever referred to it.
+- An abandoned rebind expires after 15 minutes and is discarded on next use, so
+  a forgotten rebind cannot linger as a second usable secret.
+
+The DEK never changes, so note ciphertext is never re-encrypted (ADR-004).
 
 ## Versioning policy
 

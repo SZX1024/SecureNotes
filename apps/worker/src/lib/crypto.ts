@@ -1,47 +1,25 @@
+import { base64ToBytes, bytesToBase64, randomBytes, utf8, type Bytes } from "@securenotes/shared";
+
+export {
+  base64ToBytes,
+  bytesToBase64,
+  bytesToHex,
+  randomBytes,
+  sha256,
+  sha256Hex,
+  timingSafeEqualHex,
+  utf8,
+  wipe,
+} from "@securenotes/shared";
+
 /**
- * Small WebCrypto helpers used on the authentication path.
+ * Worker-only cryptographic helpers.
  *
- * Nothing here holds application data keys: note/folder/attachment plaintext is
- * encrypted in the browser and this worker never has a key for it. These
- * primitives only protect worker-side authentication state (session tokens,
- * TOTP secrets at rest, CSRF tokens).
+ * The generic byte and digest primitives now live in `@securenotes/shared` so
+ * the browser and the worker cannot drift apart; what remains here is specific
+ * to the server side of the authentication domain. Note that nothing in this
+ * file can decrypt application data: the worker never holds a note key.
  */
-
-const textEncoder = new TextEncoder();
-
-export function utf8(value: string): Uint8Array {
-  return textEncoder.encode(value);
-}
-
-export function bytesToHex(bytes: Uint8Array): string {
-  let hex = "";
-  for (const byte of bytes) {
-    hex += byte.toString(16).padStart(2, "0");
-  }
-  return hex;
-}
-
-export function bytesToBase64(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
-  }
-  return btoa(binary);
-}
-
-export function base64ToBytes(value: string): Uint8Array {
-  const binary = atob(value);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return bytes;
-}
-
-/** Random bytes from the platform CSPRNG. Never Math.random. */
-export function randomBytes(length: number): Uint8Array {
-  return crypto.getRandomValues(new Uint8Array(length));
-}
 
 /** URL-safe random token, used for session tokens and CSRF tokens. */
 export function randomToken(byteLength = 32): string {
@@ -51,21 +29,14 @@ export function randomToken(byteLength = 32): string {
     .replace(/=+$/, "");
 }
 
-export async function sha256(bytes: Uint8Array): Promise<Uint8Array> {
-  return new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
-}
-
-/** Hex SHA-256, the storage form of every verification digest in the schema. */
-export async function sha256Hex(value: string | Uint8Array): Promise<string> {
-  const input = typeof value === "string" ? utf8(value) : value;
-  return bytesToHex(await sha256(input));
-}
-
+/**
+ * HMAC for TOTP verification and for the stateless CSRF token.
+ */
 export async function hmac(
   algorithm: "SHA-1" | "SHA-256" | "SHA-512",
-  key: Uint8Array,
-  message: Uint8Array,
-): Promise<Uint8Array> {
+  key: Bytes,
+  message: Bytes,
+): Promise<Bytes> {
   const cryptoKey = await crypto.subtle.importKey(
     "raw",
     key,
@@ -74,21 +45,6 @@ export async function hmac(
     ["sign"],
   );
   return new Uint8Array(await crypto.subtle.sign("HMAC", cryptoKey, message));
-}
-
-/**
- * Compares two hex digests without an early exit, so verification time does not
- * reveal how many leading characters an attacker guessed correctly.
- */
-export function timingSafeEqualHex(a: string, b: string): boolean {
-  if (a.length !== b.length) {
-    return false;
-  }
-  let difference = 0;
-  for (let index = 0; index < a.length; index += 1) {
-    difference |= a.charCodeAt(index) ^ b.charCodeAt(index);
-  }
-  return difference === 0;
 }
 
 /**
@@ -112,7 +68,9 @@ export function uuidv7(nowMs: number, random: Uint8Array): string {
   bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x70;
   bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
 
-  const hex = bytesToHex(bytes);
+  const hex = Array.from(bytes)
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
   return [
     hex.slice(0, 8),
     hex.slice(8, 12),

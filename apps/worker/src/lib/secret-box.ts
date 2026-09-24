@@ -1,3 +1,5 @@
+import { utf8, type Bytes } from "@securenotes/shared";
+
 import {
   base64ToBytes,
   bytesToBase64,
@@ -30,7 +32,7 @@ const IV_BYTES = 12;
 export async function sealSecret(
   rootKeyBase64: string,
   purpose: SealPurpose,
-  plaintext: Uint8Array,
+  plaintext: Bytes,
 ): Promise<SealedSecret> {
   const key = await importAesGcmKey(await deriveWorkerKey(rootKeyBase64, purpose));
   const iv = randomBytes(IV_BYTES);
@@ -50,7 +52,7 @@ export async function openSecret(
   rootKeyBase64: string,
   purpose: SealPurpose,
   sealed: SealedSecret,
-): Promise<Uint8Array> {
+): Promise<Bytes> {
   const key = await importAesGcmKey(await deriveWorkerKey(rootKeyBase64, purpose));
   const iv = base64ToBytes(sealed.iv);
   if (iv.length !== IV_BYTES) {
@@ -69,7 +71,7 @@ export async function sealText(
   purpose: SealPurpose,
   plaintext: string,
 ): Promise<SealedSecret> {
-  return sealSecret(rootKeyBase64, purpose, new TextEncoder().encode(plaintext));
+  return sealSecret(rootKeyBase64, purpose, utf8(plaintext));
 }
 
 export async function openText(

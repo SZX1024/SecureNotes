@@ -42,12 +42,20 @@ beforeEach(resetRateLimits);
 describe("first-run enrolment (§3)", () => {
   it("returns exactly ten 32-character recovery codes", () => {
     expect(account.recoveryCodes).toHaveLength(RECOVERY_CODE_COUNT);
-    for (const code of account.recoveryCodes) {
-      expect(code).toHaveLength(RECOVERY_CODE_LENGTH);
-      expect(code).toMatch(/^[A-Z2-9]{32}$/);
+    for (const entry of account.recoveryCodes) {
+      expect(entry.code).toHaveLength(RECOVERY_CODE_LENGTH);
+      expect(entry.code).toMatch(/^[A-Z2-9]{32}$/);
+      // The salt is public but must be per code, or one compromise would
+      // weaken every other recovery path.
+      expect(entry.salt.length).toBeGreaterThan(0);
     }
     // Codes must be distinct, otherwise a "ten" code list is a lie.
-    expect(new Set(account.recoveryCodes).size).toBe(RECOVERY_CODE_COUNT);
+    expect(new Set(account.recoveryCodes.map((entry) => entry.code)).size).toBe(
+      RECOVERY_CODE_COUNT,
+    );
+    expect(new Set(account.recoveryCodes.map((entry) => entry.salt)).size).toBe(
+      RECOVERY_CODE_COUNT,
+    );
   });
 
   it("shows a base32 TOTP secret and an otpauth URI", () => {
@@ -275,7 +283,7 @@ describe("brute force and progressive backoff (§3, §31)", () => {
 
 describe("recovery login (§3, §31)", () => {
   it("accepts a code once, then refuses it forever", async () => {
-    const code = account.recoveryCodes[0]!;
+    const code = account.recoveryCodes[0]!.code;
 
     const first = await apiRequest<Record<string, unknown>>("/auth/recovery", {
       method: "POST",
@@ -302,7 +310,7 @@ describe("recovery login (§3, §31)", () => {
       data: { revokedOtherSessions: number; mustRebindTotp: boolean; session: { id: string } };
     }>("/auth/recovery", {
       method: "POST",
-      body: { username: account.username, code: account.recoveryCodes[1]! },
+      body: { username: account.username, code: account.recoveryCodes[1]!.code },
       headers: { "cf-connecting-ip": "198.51.100.41" },
     });
 
@@ -332,7 +340,7 @@ describe("recovery login (§3, §31)", () => {
   });
 
   it("never stores a plaintext recovery code anywhere", async () => {
-    const usedCode = account.recoveryCodes[0]!;
+    const usedCode = account.recoveryCodes[0]!.code;
 
     const inCodes = await testEnv.DB.prepare(
       "SELECT count(*) AS c FROM recovery_codes WHERE code_hash = ?1",

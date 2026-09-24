@@ -241,8 +241,8 @@ describe("authorization boundaries (§14, §31)", () => {
     const serialized = JSON.stringify(response.body);
     expect(serialized).not.toContain("detail_ciphertext");
     expect(serialized).not.toContain(account.totpSecret);
-    for (const code of account.recoveryCodes) {
-      expect(serialized).not.toContain(code);
+    for (const entry of account.recoveryCodes) {
+      expect(serialized).not.toContain(entry.code);
     }
   });
 

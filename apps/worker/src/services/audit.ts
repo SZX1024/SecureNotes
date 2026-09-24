@@ -36,6 +36,9 @@ export type AuditEventType =
   | "logout"
   | "rate_limited"
   | "totp_changed"
+  | "totp_change_started"
+  | "totp_change_verified"
+  | "totp_change_rolled_back"
   | "key_material_updated"
   | "data_operation";
 

@@ -10,6 +10,7 @@ import { requestId } from "./middleware/request-id";
 import { securityHeaders } from "./middleware/security-headers";
 import { attachSession } from "./middleware/session";
 import { auditRoutes } from "./routes/audit";
+import { securityRoutes } from "./routes/security";
 import { authRoutes } from "./routes/auth";
 import { sessionRoutes } from "./routes/sessions";
 import { APP_VERSION } from "./version";
@@ -69,6 +70,7 @@ export function createApp(): Hono<AppBindings> {
   api.route("/", authRoutes);
   api.route("/", sessionRoutes);
   api.route("/", auditRoutes);
+  api.route("/", securityRoutes);
 
   app.route(API_PREFIX, api);
 

@@ -1,3 +1,4 @@
+import { utf8 } from "@securenotes/shared";
 import { describe, expect, it } from "vitest";
 
 import { classifyClient, truncateIp } from "../src/lib/client-meta";
@@ -76,7 +77,7 @@ describe("uuidv7", () => {
 
 describe("secret box", () => {
   it("round-trips a secret", async () => {
-    const plaintext = new TextEncoder().encode("JBSWY3DPEHPK3PXP");
+    const plaintext = utf8("JBSWY3DPEHPK3PXP");
     const sealed = await sealSecret(WRAP_KEY, "totp-secret", plaintext);
 
     expect(sealed.iv).not.toBe("");
@@ -86,7 +87,7 @@ describe("secret box", () => {
   });
 
   it("uses a fresh IV per sealing", async () => {
-    const plaintext = new TextEncoder().encode("same plaintext");
+    const plaintext = utf8("same plaintext");
 
     const first = await sealSecret(WRAP_KEY, "totp-secret", plaintext);
     const second = await sealSecret(WRAP_KEY, "totp-secret", plaintext);
@@ -97,7 +98,7 @@ describe("secret box", () => {
   });
 
   it("keeps purposes separated under one root key", async () => {
-    const sealed = await sealSecret(WRAP_KEY, "totp-secret", new TextEncoder().encode("secret"));
+    const sealed = await sealSecret(WRAP_KEY, "totp-secret", utf8("secret"));
 
     // A different purpose derives a different key, so the blob cannot be
     // reinterpreted as a different kind of secret.
@@ -105,7 +106,7 @@ describe("secret box", () => {
   });
 
   it("fails closed on tampering or a wrong key", async () => {
-    const sealed = await sealSecret(WRAP_KEY, "totp-secret", new TextEncoder().encode("secret"));
+    const sealed = await sealSecret(WRAP_KEY, "totp-secret", utf8("secret"));
 
     const tamperedBytes = base64ToBytes(sealed.ciphertext);
     tamperedBytes[0] = (tamperedBytes[0] ?? 0) ^ 0x01;
@@ -121,7 +122,7 @@ describe("secret box", () => {
   });
 
   it("rejects a malformed IV length", async () => {
-    const sealed = await sealSecret(WRAP_KEY, "totp-secret", new TextEncoder().encode("secret"));
+    const sealed = await sealSecret(WRAP_KEY, "totp-secret", utf8("secret"));
 
     await expect(openSecret(WRAP_KEY, "totp-secret", { ...sealed, iv: "AAAA" })).rejects.toThrow(
       RangeError,
