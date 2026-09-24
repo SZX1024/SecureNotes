@@ -931,3 +931,28 @@ worker 日志给出确证：`POST /api/v1/attachments → 401 Unauthorized`（4 
 测试从「iframe 一律删除」改为断言**隔离**：HTTPS 保留且 `sandbox` 正确、笔记授予的权限被丢弃、
 非 HTTPS（`http:`/`javascript:`/`data:`/协议相对）被删除、video 保留 `controls` 但无 `autoplay`
 无子元素、`object`/`embed`/`applet` 仍被删除。
+
+### 20.5 WYSIWYG 编辑器内的公式与 Mermaid：就地渲染（本批）
+
+**为什么必须自己写**：检查 `@milkdown/kit@7.22.2` 的 45 个导出，**没有 math 也没有 diagram 插件**
+（只有 `diff`/`upload`/`code-block`/`image-block`/`list-item-block`/`table-block` 等）。
+
+**做法**：`src/editor/inline-render.ts` 用 **ProseMirror decoration** 实现（`$prose` +
+`prose/state` + `prose/view`，三者 kit 都导出）：
+
+- **公式**（`$…$` 与 `$$…$$`）：**隐藏源码区间 + 在该位置放渲染组件**。关键取舍：**只有当光标不在该
+  区间内时才隐藏** —— 否则那行 TeX 永远无法编辑。区间用 `Decoration.inline` 加类隐藏，
+  公式用 `Decoration.widget` 插入。
+- **Mermaid**：对 `code_block` 且 `language === "mermaid"` 的节点，在**块之后**插入渲染结果；
+  异步渲染带**按源码缓存**，未命中时先不显示、渲染完成后再由后续 decoration 重建呈现。
+  输出**必经 `sanitizeSvg`**（§12 的 `Markdown → Mermaid → SVG → 净化 → DOM`），
+  并同样设置 `htmlLabels: false`（`foreignObject` 会被 SVG 净化删除 → 否则标签消失）。
+- **渲染结果绝不进入文档**：decoration 只是呈现层，保存的仍是 Markdown（测试断言 DOM 里同时存在
+  KaTeX 标记与原始 `$…$` 源码，且源码是被类隐藏而非删除）。
+- 公式走 `katex.renderToString({ trust: false, throwOnError: false })`，输出再经 `sanitizeHtml` ——
+  与 Preview 同一个边界，**公式不比它所在的笔记更可信**。
+
+**测试能在 jsdom 里验到什么**：加好 `Range` 垫片后，ProseMirror 在 jsdom 中**确实**完成了布局与
+decoration 渲染 —— 测试断言 **DOM 里出现 `class="katex"`**、原文 `$a^2 + b^2 = c^2$` **仍在**、
+且源码区间带隐藏类。这比之前「WYSIWYG 完全无法验证」前进了一步；不过**视觉效果（对齐、间距、
+光标行为）仍需你在浏览器确认**。

@@ -427,3 +427,32 @@ button.primary {
   align-items: center;
   justify-content: space-between;
 }
+
+/* In-place rendering inside the WYSIWYG editor (§12).
+
+   The source is hidden while the cursor is elsewhere and shown again the moment it enters the
+   range, because otherwise a formula could never be edited. */
+.render-source-hidden {
+  display: none;
+}
+
+.math-preview {
+  padding: 0 0.15rem;
+}
+
+.math-preview-block {
+  display: block;
+  margin: 0.5rem 0;
+  text-align: center;
+}
+
+.diagram-preview {
+  padding: 0.5rem;
+  margin: 0.25rem 0;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+}
+
+.diagram-preview svg {
+  max-width: 100%;
+}

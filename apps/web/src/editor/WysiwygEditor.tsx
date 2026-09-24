@@ -4,6 +4,8 @@ import { commonmark } from "@milkdown/kit/preset/commonmark";
 import { gfm } from "@milkdown/kit/preset/gfm";
 import { useEffect, useRef } from "react";
 
+import { inlineRenderPlugin } from "./inline-render";
+
 /**
  * WYSIWYG mode (§12).
  *
@@ -57,6 +59,7 @@ export function WysiwygEditor({ value, onChange, ariaLabel }: WysiwygEditorProps
         .use(commonmark)
         .use(gfm)
         .use(listener)
+        .use(inlineRenderPlugin)
         .create();
 
       if (cancelled) {
