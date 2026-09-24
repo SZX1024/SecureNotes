@@ -618,3 +618,43 @@ VITE_API_TARGET=http://127.0.0.1:8791 pnpm dev:web      # http://localhost:5173
 - 附件上传的 UI（API 已就绪）。
 - 主题切换（跟随系统/手动亮/暗）——目前只有跟随系统的 CSS 变量。
 - `manifest.webmanifest` 仍是占位图标。
+
+## 18. P5 修复：注册向导无法完成（用户报告，已修）
+
+### 18.1 现象与根因
+
+用户报告：**输入用户名后没有显示 otpauth URI 与 10 个恢复码。**
+
+根因：`POST /auth/setup` **不创建会话**（P2 的设计决定），但 `enrolAccount()` 在创建账户之后
+必须调用 `POST /security/operation-nonce` 与 `POST /key-material` 上传包裹后的 DEK —— 这两个端点
+都受 `requireSession` 保护，于是返回 **401**，函数抛出，向导在**已经创建了账户之后**失败，
+所以二维码与恢复码从未渲染。更糟的是：账户已存在（再次 setup 会 412），而密钥材料永远无法上传。
+
+这是我引入的真实缺陷；P2/P3 的测试都没覆盖「注册向导」这条路径（它们各自调用 setup 与 key-material，
+但从不把两者串成一次流程）。
+
+### 18.2 修复
+
+`POST /auth/setup` 现在**建立第一个会话**（HttpOnly+Secure+SameSite=Strict 的 session 与可读的 csrf），
+于是客户端可以在同一次向导里完成密钥材料上传。代价已在 `docs/decisions.md` 记录并被限定：
+第一个会话由「创建账户」这一行为本身建立（谁能先到达该端点，账户本来就是谁的），
+**后续任何会话仍然需要当前 TOTP 码**，且注册会话不是 remember-device 会话。
+
+### 18.3 验证
+
+- **真实 HTTP 全流程实测**（`wrangler dev`，全新数据库）：
+  `POST /auth/setup` → 200，返回 session + csrf Cookie、totpUri、10 个恢复码；
+  `POST /security/operation-nonce` → **200（修复前是 401）**；
+  `POST /key-material`（10 份恢复包裹）→ 200 `{keyMaterialPresent:true,keyVersion:1}`。
+- **新增回归测试** `apps/worker/test/enrolment.test.ts`（3 测试，独立空库）：
+  1. setup 返回的会话能真正用于开 nonce 与上传密钥材料（直接覆盖本次缺陷）；
+  2. 第二次 setup 返回 412 且**不发放会话**；
+  3. 首个会话在审计里留下 `session_created` 事件且 detail 为密文。
+
+### 18.4 仍需你注意
+
+- 若浏览器在向导中途关闭：账户可能已创建但密钥材料未上传。此时再次 setup 会 412，
+  而恢复码/二维码可能未保存 → **需要手工清空本地 D1 状态重来**（本地开发环境：删除
+  `apps/worker/.wrangler/state`）。生产环境下的「重新完成注册」流程**尚未实现**，
+  已记录为后续项。
+- 本地 D1 已重置为首运行状态，你打开浏览器应看到 **First run**。

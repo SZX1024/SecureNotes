@@ -645,6 +645,10 @@ function SetupScreen({
             </li>
           ))}
         </ol>
+        <p className="muted">
+          Enrolment is complete once you continue: your keys are wrapped and uploaded, and this
+          device is signed in. Later sign-ins still require your authenticator code.
+        </p>
         <button type="button" className="primary" onClick={() => void onEnrolled(pending)}>
           I saved them — continue
         </button>

@@ -135,8 +135,16 @@ Tracked here until decided; none of them block P0.
   per-purpose AES-GCM keys with HKDF-SHA-256 (`totp-secret`, `audit-detail`), so a blob
   sealed for one purpose cannot be opened as another while only one secret must be
   provisioned.
-- **Enrolment does not create a session.** After `/auth/setup` the user logs in through the
-  normal TOTP path, so first-run setup can never bypass the second factor.
+- **Enrolment creates the first session** _(revised in the P5 fix below)_. Originally
+  `/auth/setup` created no session so that setup could not bypass the second factor. That
+  was wrong in practice: enrolment is only complete once the client has uploaded the
+  wrapped DEK and the ten recovery wrappings, and that upload is authenticated — so the
+  wizard failed _after_ creating the account, leaving key material permanently missing and
+  one-time recovery codes shown for an account that could never store their wrappings.
+  Setup now returns a session, and the trade-off is narrow and disclosed: the first
+  session is established by the act of creating the account (whoever reaches the endpoint
+  first becomes the account either way), every later session still requires a current TOTP
+  code, and the enrolment session is not a remember-device session.
 - **Cookies are attached to the response, not the context.** `setCookie(c, …)` followed by
   a handler returning a freshly built `Response` silently drops cookies in Hono, and the
   P0 `jsonOk` helper returns a raw Response — a live bug that this phase fixed. Cookies are

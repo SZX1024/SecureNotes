@@ -152,8 +152,19 @@ authRoutes.get("/auth/status", async (c) => {
 
 /**
  * First-run initialization (§3). Returns the TOTP secret and the ten recovery
- * codes exactly once, and does not create a session: the user then logs in
- * through the normal TOTP path, so enrolment never bypasses the second factor.
+ * codes exactly once.
+ *
+ * It also establishes the first session, because enrolment is not finished until
+ * the client has uploaded the wrapped DEK and the ten recovery wrappings — and
+ * that upload is an authenticated operation. Without a session here the client
+ * could create an account it could never provision: the wizard would fail after
+ * the account already existed, leaving key material permanently missing and the
+ * recovery codes shown for an account that could not store their wrappings.
+ *
+ * The trade-off, recorded in docs/decisions.md: the very first session is
+ * established by creating the account rather than by a TOTP code. That is the
+ * same act — whoever reaches this endpoint first becomes the account — so it adds
+ * no exposure, and every later session still requires a current code.
  */
 authRoutes.post("/auth/setup", authBodyGuard(), async (c) => {
   const body = await parseJsonBody(c, setupSchema);
@@ -165,30 +176,68 @@ authRoutes.post("/auth/setup", authBodyGuard(), async (c) => {
     throw new ApiError("PRECONDITION_FAILED", { diagnostic: "account already initialized" });
   }
 
+  const { created } = await createSession(
+    c.env,
+    {
+      userId: result.account.id,
+      // The device is not remembered yet: the user has not asked for it, and an
+      // enrolment session should not outlive the browser by default.
+      rememberDevice: false,
+      ipTruncated: meta.ipTruncated,
+      clientCategory: meta.clientCategory,
+    },
+    now,
+  );
+
   await writeAuditEvent(
     c.env,
     {
       userId: result.account.id,
       category: "account",
       eventType: "account_initialized",
+      sessionId: created.session.id,
       ipTruncated: meta.ipTruncated,
       clientCategory: meta.clientCategory,
     },
     now,
     meta.requestId,
   );
+  await writeAuditEvent(
+    c.env,
+    {
+      userId: result.account.id,
+      category: "session",
+      eventType: "session_created",
+      sessionId: created.session.id,
+      ipTruncated: meta.ipTruncated,
+      clientCategory: meta.clientCategory,
+      detail: "first session, created by enrolment",
+    },
+    now,
+    meta.requestId,
+  );
 
-  return jsonOk({
-    userId: result.account.id,
-    username: result.account.username,
-    kdfSalt: result.account.kdfSalt,
-    keyVersion: result.account.keyVersion,
-    totpSecret: result.totpSecretBase32,
-    totpUri: result.totpUri,
-    recoveryCodes: result.recoveryCodes,
-    // Shown once: the server keeps only digests from this point on.
-    recoveryCodesShownOnce: true,
-  });
+  return applySessionCookies(
+    jsonOk({
+      ...sessionPayload(created.session, created.csrfToken),
+      userId: result.account.id,
+      username: result.account.username,
+      kdfSalt: result.account.kdfSalt,
+      keyVersion: result.account.keyVersion,
+      totpSecret: result.totpSecretBase32,
+      totpUri: result.totpUri,
+      recoveryCodes: result.recoveryCodes,
+      // Shown once: the server keeps only digests from this point on.
+      recoveryCodesShownOnce: true,
+      // The client must upload the wrapped DEK before enrolment is complete.
+      keyMaterialPresent: false,
+    }),
+    {
+      token: created.token,
+      csrfToken: created.csrfToken,
+      rememberDevice: created.session.rememberDevice,
+    },
+  );
 });
 
 /** Username + current TOTP (§3). */
