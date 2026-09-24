@@ -219,3 +219,38 @@ button.primary {
 .mermaid-diagram svg {
   max-width: 100%;
 }
+
+.source-editor .cm-editor,
+.wysiwyg-editor {
+  min-height: 12rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+}
+
+.source-editor .cm-editor {
+  flex: 1;
+}
+
+.source-editor .cm-scroller {
+  font-family: ui-monospace, monospace;
+}
+
+.wysiwyg-editor {
+  flex: 1;
+  padding: 0.5rem;
+  overflow: auto;
+}
+
+.wysiwyg-editor .ProseMirror {
+  outline: none;
+}
+
+.wysiwyg-editor table {
+  border-collapse: collapse;
+}
+
+.wysiwyg-editor th,
+.wysiwyg-editor td {
+  padding: 0.2rem 0.5rem;
+  border: 1px solid var(--border);
+}

@@ -18,8 +18,10 @@ import {
 import { openAppDatabase } from "./local/migrations";
 import { KeyStore } from "./local/key-store";
 import type { SecureNotesDatabase } from "./local/schema";
-import { renderMarkdown, renderMermaidBlocks } from "./render/markdown";
 import { NoteSearchIndex, highlightSegments } from "./search";
+import { defaultEditorMode, type EditorMode } from "./editor/mode";
+import type { MarkdownSourceEditor as MarkdownSourceEditorType } from "./editor/MarkdownSourceEditor";
+import type { WysiwygEditor as WysiwygEditorType } from "./editor/WysiwygEditor";
 import {
   buildCommands,
   filterCommands,
@@ -41,6 +43,20 @@ import "./styles/app.css";
 
 type Screen = "loading" | "setup" | "login" | "unlock" | "app" | "recycle-bin";
 
+/**
+ * Editors and the render pipeline are loaded on demand.
+ *
+ * KaTeX, Milkdown/ProseMirror and CodeMirror are all large, and none of them is
+ * needed to show a locked note list or an empty editor — so a static import would put
+ * them in the first paint for every visitor. They arrive when a note is opened, and
+ * Mermaid (the largest of all) only when a note actually contains a diagram.
+ */
+const loadSourceEditor = () =>
+  import("./editor/MarkdownSourceEditor").then((module) => module.MarkdownSourceEditor);
+const loadWysiwygEditor = () =>
+  import("./editor/WysiwygEditor").then((module) => module.WysiwygEditor);
+const loadRender = () => import("./render/markdown");
+
 interface DraftNote {
   id: string;
   title: string;
@@ -61,6 +77,14 @@ export function App() {
   const [paletteQuery, setPaletteQuery] = useState("");
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const [preview, setPreview] = useState(false);
+  const [editorMode, setEditorMode] = useState<EditorMode>(() =>
+    defaultEditorMode(
+      typeof window === "undefined" ? 1024 : window.innerWidth,
+      typeof window !== "undefined" && typeof window.matchMedia === "function"
+        ? window.matchMedia("(pointer: coarse)").matches
+        : false,
+    ),
+  );
   const [message, setMessage] = useState<string | null>(null);
 
   // Held as state rather than refs: the render path reads both, and reading a ref
@@ -533,11 +557,13 @@ export function App() {
             {preview ? (
               <MarkdownPreview title={draft.title} body={draft.body} />
             ) : (
-              <textarea
-                className="note-body"
+              <LazyEditor
+                key={draft.id}
+                mode={editorMode}
                 value={draft.body}
-                aria-label="Note body"
-                onChange={(event) => setDraft({ ...draft, body: event.target.value })}
+                onChange={(body) =>
+                  setDraft((current) => (current ? { ...current, body } : current))
+                }
               />
             )}
             <footer>
@@ -547,9 +573,17 @@ export function App() {
               <button type="button" onClick={() => setPreview((current) => !current)}>
                 {preview ? "Edit" : "Preview"}
               </button>
+              <button
+                type="button"
+                disabled={preview}
+                onClick={() => setEditorMode((mode) => (mode === "wysiwyg" ? "source" : "wysiwyg"))}
+              >
+                {editorMode === "wysiwyg" ? "Markdown source" : "WYSIWYG"}
+              </button>
               <span className="muted">
-                Stored encrypted on this device and queued for sync. The WYSIWYG editor arrives in
-                P6.
+                {preview
+                  ? "Rendered through the sanitizer."
+                  : `Editing in ${editorMode === "wysiwyg" ? "WYSIWYG" : "Markdown source"} mode, stored encrypted and queued for sync.`}
               </span>
             </footer>
           </>
@@ -597,6 +631,39 @@ export function App() {
   );
 }
 
+/** Hosts whichever editor the mode selects, loading it on first use. */
+function LazyEditor({
+  mode,
+  value,
+  onChange,
+}: {
+  mode: EditorMode;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const [Component, setComponent] = useState<
+    typeof MarkdownSourceEditorType | typeof WysiwygEditorType | null
+  >(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = mode === "wysiwyg" ? loadWysiwygEditor : loadSourceEditor;
+    void load().then((loaded) => {
+      if (!cancelled) {
+        setComponent(() => loaded);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [mode]);
+
+  if (!Component) {
+    return <p className="muted">Loading the editor…</p>;
+  }
+  return <Component value={value} onChange={onChange} />;
+}
+
 /**
  * Renders a note's Markdown (§12).
  *
@@ -607,19 +674,31 @@ export function App() {
  */
 function MarkdownPreview({ title, body }: { title: string; body: string }) {
   const container = useRef<HTMLDivElement>(null);
-  const html = useMemo(
-    () => renderMarkdown(title.trim().length > 0 ? `# ${title}\n\n${body}` : body),
-    [title, body],
-  );
+  const [html, setHtml] = useState<string | null>(null);
 
   useEffect(() => {
-    // Mermaid is rendered after insertion and its SVG is sanitised before it goes in
-    // (§12: Markdown -> Mermaid -> SVG -> sanitizer -> DOM).
-    if (container.current) {
-      void renderMermaidBlocks(container.current);
-    }
-  }, [html]);
+    let cancelled = false;
+    void loadRender().then(({ renderMarkdown, renderMermaidBlocks }) => {
+      if (cancelled) {
+        return;
+      }
+      setHtml(renderMarkdown(title.trim().length > 0 ? `# ${title}\n\n${body}` : body));
+      // Mermaid is rendered after insertion and its SVG is sanitised before it goes
+      // in (§12: Markdown -> Mermaid -> SVG -> sanitizer -> DOM).
+      queueMicrotask(() => {
+        if (!cancelled && container.current) {
+          void renderMermaidBlocks(container.current);
+        }
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [title, body]);
 
+  if (html === null) {
+    return <p className="muted">Rendering…</p>;
+  }
   return <div className="preview" ref={container} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 

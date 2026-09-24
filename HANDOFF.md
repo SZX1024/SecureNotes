@@ -659,7 +659,7 @@ VITE_API_TARGET=http://127.0.0.1:8791 pnpm dev:web      # http://localhost:5173
   已记录为后续项。
 - 本地 D1 已重置为首运行状态，你打开浏览器应看到 **First run**。
 
-## 19. P6 第 1-2 批：渲染安全 + Markdown 管线 — **P6 未完成**
+## 19. P6 第 1-3 批：渲染安全 + Markdown 管线 + 编辑器本体 — **P6 未完成**
 
 ### 19.1 交付物
 
@@ -701,14 +701,46 @@ VITE_API_TARGET=http://127.0.0.1:8791 pnpm dev:web      # http://localhost:5173
 - **已接入界面**：编辑器新增 **Preview** 开关，渲染经 `renderMarkdown` + `renderMermaidBlocks`，
   是仓库里**唯一**使用 `dangerouslySetInnerHTML` 的地方（净化是它可接受的理由）。
 
+### 19.3c 第 3 批：编辑器本体 + 首屏体积（`src/editor/*`，8 测试）
+
+- **Markdown 源码模式**（CodeMirror 6 + `@codemirror/lang-markdown`）：显示的就是存储格式本身，
+  因此它也是验证「未知扩展是否幸存」的地方。改动只回报给笔记文档，**绝不直接写存储**，
+  所以一次按键无法绕过「加密 + 入队」这条路径。
+- **WYSIWYG**（Milkdown + `commonmark` + `gfm` preset）：**Markdown 仍是存储格式** ——
+  从笔记的 Markdown 建编辑器、回报 Markdown，保存的永远不是编辑器自己的文档模型。
+  gfm preset 提供 §12 要求的表格与任务清单。
+- **模式规则可测**：`defaultEditorMode(视口宽, 是否粗指针, 已存偏好)` → 手机/粗指针默认 WYSIWYG（§12），
+  桌面默认源码，用户显式选择优先。已存偏好参数为下一步的持久化预留。
+- **14 个测试里我明确不假装覆盖的部分**：WYSIWYG **不做 jsdom 渲染测试** ——
+  Milkdown 建立在 ProseMirror 上、需要真实布局引擎（与 Mermaid 的 `getBBox` 同类限制）。
+  我验证的是「模块可加载、宿主可挂载」，并在测试注释与报告里写明**真实编辑体验需要你在浏览器验收**。
+
+#### 首屏体积：一次我造成又修掉的退化
+
+| 阶段                            | 入口 chunk         | gzip       |
+| ------------------------------- | ------------------ | ---------- |
+| 第 2 批后（KaTeX 静态引入）     | 835 KB             | 259 KB     |
+| 第 3 批首次尝试（以为已懒加载） | **976 KB（更糟）** | 325 KB     |
+| 修复后                          | **370 KB**         | **117 KB** |
+
+**为什么会先变糟**：我把 `defaultEditorMode` 从 `MarkdownSourceEditor.tsx` 静态引入 App，
+而那个文件 `import` 了 CodeMirror —— 于是「懒加载编辑器」被一个**常量导入**击穿。
+**两个独立信号同时指出了这个设计缺陷**：ESLint 的 `react-refresh/only-export-components`
+（组件文件不得导出常量）与构建产物。把该函数移入 `src/editor/mode.ts`（不引入任何编辑器）
+后两者同时消失。
+
+已实测确认：入口 chunk 中 **katex / milkdown / prosemirror / codemirror 全部不存在**；
+编辑器与渲染管线按需加载，Mermaid 的图类型各自分块（最大 elk 1.4 MB，仅在真的渲染对应图时才取）。
+
 ### 19.4 P6 尚未完成（下一批）
 
-1. **编辑器本体**：Milkdown WYSIWYG + CodeMirror 6 源码模式（移动端默认 WYSIWYG）、语法高亮（Shiki）、动画 GIF/WebP 保留。
-2. **未知 Markdown 扩展的 round-trip**（需求要求先写 round-trip 测试再实现）。
-3. **KaTeX 与 Mermaid 依赖接入**：Mermaid **已实测不需要 `unsafe-eval`**（见 §19.5），CSP 保持严格；KaTeX 用 `trust: false`。
-4. **粘贴/拖放**：富文本网页粘贴的提示与安全转换路径；剪贴板图片立即创建附件并插入内部附件 ID；拖放仅接受图片、>20MB 拒绝。
-5. **附件引用 UI**（引用计数/归零异步删除的服务端已就绪）。
+1. **代码块语法高亮**（Shiki/refractor）与动画 GIF/WebP 保留。
+2. **粘贴/拖放**：富文本网页粘贴的提示与安全转换路径；剪贴板图片立即创建附件并插入内部附件 ID；拖放仅接受图片、>20MB 拒绝。
+3. **附件引用 UI**（引用计数/归零异步删除的服务端已就绪）。
+4. **移动端独立布局**（§22 要求不是桌面缩小）。
+5. **编辑器模式的持久化**（`defaultEditorMode` 的 `stored` 参数已预留）。
 6. `manifest.webmanifest` 真实图标、主题手动切换（跟随系统/亮/暗）——P5 遗留项。
+7. **WYSIWYG 的真实浏览器验收**：Milkdown 的编辑体验无法在 jsdom 验证，需你确认。
 
 ### 19.5 Mermaid 的 CSP 问题：已实测，**不需要 `unsafe-eval`**
 
