@@ -52,7 +52,13 @@ async function createNote(id: string) {
 /** Uploads an encrypted blob the way the client does: multipart/form-data. */
 async function uploadAttachment(
   id: string,
-  options: { bytes?: number; contentType?: string; declaredSize?: number } = {},
+  options: {
+    bytes?: number;
+    contentType?: string;
+    declaredSize?: number;
+    contentIv?: string;
+    plaintextSizeBytes?: number;
+  } = {},
 ) {
   const bytes = new Uint8Array(options.bytes ?? 32).fill(7);
   const form = new FormData();
@@ -63,6 +69,11 @@ async function uploadAttachment(
       name: NAME,
       contentType: options.contentType ?? "image/png",
       sizeBytes: options.declaredSize ?? bytes.byteLength,
+      // The content envelope (§7): a real IV and the plaintext size the ciphertext
+      // was produced from, which the API checks against the tag length.
+      contentIv: options.contentIv ?? "AAAAAAAAAAAAAAAA",
+      plaintextSizeBytes:
+        options.plaintextSizeBytes ?? (options.declaredSize ?? bytes.byteLength) - 16,
     }),
   );
   form.set("blob", new File([bytes], "blob.bin", { type: "application/octet-stream" }));
@@ -335,5 +346,85 @@ describe("retention sweeps (§19)", () => {
         "SELECT count(*) AS c FROM notes WHERE id = 'bin-fresh'",
       ).first<number>("c"),
     ).toBe(1);
+  });
+});
+
+describe("attachment content envelope (§7, §12)", () => {
+  it("records the IV the bytes were encrypted with", async () => {
+    const uploaded = await uploadAttachment("att-env-1", { contentIv: "BBBBBBBBBBBBBBBB" });
+    expect(uploaded.status, JSON.stringify(uploaded.body)).toBe(201);
+
+    const row = await testEnv.DB.prepare(
+      "SELECT content_iv, plaintext_size_bytes, size_bytes FROM attachments WHERE id = 'att-env-1'",
+    ).first<{ content_iv: string; plaintext_size_bytes: number; size_bytes: number }>();
+
+    // Without the IV the uploaded bytes could never be decrypted again.
+    expect(row?.content_iv).toBe("BBBBBBBBBBBBBBBB");
+    expect(row?.plaintext_size_bytes).toBe(16);
+    expect(row?.size_bytes).toBe(32);
+  });
+
+  it("refuses an upload with no content IV", async () => {
+    const uploaded = await uploadAttachment("att-env-2", { contentIv: "" });
+
+    expect(uploaded.status).toBe(400);
+  });
+
+  it("refuses a plaintext size that contradicts the ciphertext size", async () => {
+    // Claiming 32 bytes of plaintext for 32 bytes of ciphertext is an inconsistent
+    // envelope: AES-GCM output is always 16 bytes longer.
+    const uploaded = await uploadAttachment("att-env-3", { plaintextSizeBytes: 32 });
+
+    expect(uploaded.status).toBe(400);
+  });
+
+  it("still refuses a declared size that does not match the upload", async () => {
+    // Under-declaring remains a way around the size limit, so it stays rejected.
+    const uploaded = await uploadAttachment("att-env-4", { declaredSize: 24 });
+
+    expect(uploaded.status).not.toBe(201);
+  });
+
+  it("returns a format marker unchanged, which is what keeps an animation animated", async () => {
+    // The property under test is the byte round trip: anything that re-encoded the
+    // content would drop the marker below and an animated image would go still.
+    const gif = new Uint8Array([
+      ...new TextEncoder().encode("GIF89a"),
+      ...new Uint8Array(2),
+      0x21,
+      0xff,
+      0x0b,
+      ...new TextEncoder().encode("NETSCAPE2.0"),
+      0x03,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+      ...new Uint8Array(2),
+    ]);
+
+    const form = new FormData();
+    form.set(
+      "metadata",
+      JSON.stringify({
+        id: "att-env-gif",
+        name: NAME,
+        contentType: "image/gif",
+        sizeBytes: gif.byteLength,
+        contentIv: "CCCCCCCCCCCCCCCC",
+        plaintextSizeBytes: gif.byteLength - 16,
+      }),
+    );
+    form.set("blob", new File([gif], "blob.bin", { type: "application/octet-stream" }));
+    const upload = await apiMultipart("/attachments", form, jar);
+    expect(upload.status, await upload.text()).toBe(201);
+
+    const content = await apiDownload("/attachments/att-env-gif/content", jar);
+    expect(content.status).toBe(200);
+    const served = new Uint8Array(await content.arrayBuffer());
+
+    expect([...served]).toEqual([...gif]);
+    expect(new TextDecoder().decode(served.slice(0, 6))).toBe("GIF89a");
+    expect(new TextDecoder().decode(served)).toContain("NETSCAPE2.0");
   });
 });

@@ -25,6 +25,8 @@ export interface AttachmentRow {
   key_version: number;
   content_type: string;
   size_bytes: number;
+  content_iv: string | null;
+  plaintext_size_bytes: number | null;
   ref_count: number;
   deletion_enqueued_at: number | null;
   created_at: number;
@@ -43,6 +45,7 @@ export function serializeAttachment(row: AttachmentRow) {
     },
     contentType: row.content_type,
     sizeBytes: row.size_bytes,
+    plaintextSizeBytes: row.plaintext_size_bytes,
     refCount: row.ref_count,
     pendingDeletion: row.deletion_enqueued_at !== null,
     createdAt: row.created_at,
@@ -70,6 +73,10 @@ export interface UploadInput {
   contentType: string;
   /** Declared plaintext-equivalent size; must agree with the uploaded bytes. */
   sizeBytes: number;
+  /** IV of the content envelope. Without it the stored bytes cannot be decrypted. */
+  contentIv: string;
+  /** Size of the plaintext the ciphertext was produced from. */
+  plaintextSizeBytes: number;
   blob: ArrayBuffer;
 }
 
@@ -95,6 +102,17 @@ export async function storeAttachment(
   if (input.blob.byteLength > MAX_ATTACHMENT_BYTES) {
     throw new ApiError("PAYLOAD_TOO_LARGE", { diagnostic: "attachments are limited to 20 MB" });
   }
+  // AES-GCM appends a 16-byte tag, so ciphertext = plaintext + 16 exactly. Checking it
+  // binds the two declared numbers to each other: a client cannot claim a small
+  // plaintext for a large upload, and a mismatch means the envelope is inconsistent.
+  if (input.contentIv.length === 0) {
+    throw new ApiError("VALIDATION_FAILED", { diagnostic: "a content IV is required" });
+  }
+  if (input.sizeBytes - input.plaintextSizeBytes !== 16) {
+    throw new ApiError("VALIDATION_FAILED", {
+      diagnostic: "plaintextSizeBytes and sizeBytes are inconsistent with AES-GCM",
+    });
+  }
   if (input.sizeBytes !== input.blob.byteLength) {
     throw new ApiError("VALIDATION_FAILED", {
       diagnostic: "sizeBytes does not match the uploaded bytes",
@@ -115,8 +133,8 @@ export async function storeAttachment(
     await env.DB.batch([
       env.DB.prepare(
         `INSERT INTO attachments
-           (id, user_id, r2_key, name_iv, name_ciphertext, crypto_version, key_version, content_type, size_bytes, ref_count, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?10, ?10)`,
+           (id, user_id, r2_key, name_iv, name_ciphertext, crypto_version, key_version, content_type, size_bytes, content_iv, plaintext_size_bytes, ref_count, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, ?12, ?12)`,
       ).bind(
         input.id,
         userId,
@@ -127,6 +145,8 @@ export async function storeAttachment(
         input.name.key_version,
         input.contentType,
         input.sizeBytes,
+        input.contentIv,
+        input.plaintextSizeBytes,
         nowMs,
       ),
       syncChangeStatement(env, {

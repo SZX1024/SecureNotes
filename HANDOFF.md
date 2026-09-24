@@ -787,3 +787,35 @@ VITE_API_TARGET=http://127.0.0.1:8791 pnpm dev:web      # http://localhost:5173
 
 - **GIF/WebP 动画保留**未验证（`<img>` 引用不经过解码，理论上保留，但我没有实测，不写成已完成）。
 - **附件引用 UI**（插入/列出/删除）未做。
+
+### 19.7 附件内容信封（用户决策：加迁移）
+
+**决策**：附件字节必须能加密（§7）。`POST /attachments` 原先只有 `id/name/contentType/sizeBytes`，
+**没有任何承载内容信封的字段**，所以客户端无法像加密笔记那样加密附件。
+
+**迁移** `0003_attachment_content_envelope.sql`：给 `attachments` 加
+`content_iv TEXT` 与 `plaintext_size_bytes INTEGER`（两列可空 —— SQLite 无法加无默认值的 NOT NULL 列，
+而给历史行编造 IV 会产生「看起来能解密、实际不能」的数据；新上传由 API 强制要求）。
+`name_iv`/`name_ciphertext` 与 `crypto_version`/`key_version` 列**本来就有**（名称信封早就是加密的）。
+
+**服务端**：
+
+- `metadataSchema` 增加 `contentIv`、`plaintextSizeBytes`（仍 `.strict()`）。
+- 校验**密文与明文的绑定**：`sizeBytes - plaintextSizeBytes === 16`。这不是装饰 —— 它让客户端
+  无法为一个大上传声明一个小明文；对 GCM 而言二者的差恒为 tag 长度。
+- 原有的「声明大小 == 实发字节」检查保留（少报仍是绕过上限的手段）。
+
+#### 本次测试抓到的一个真实数据完整性缺陷
+
+新增的「记录 IV」测试第一次运行时报告 `expected '16.0' to be 'BBBBBBBBBBBBBBBB'`。
+根因：我在 INSERT 里**重排了 `?N` 占位符却没同步参数顺序**，而 `bind()` 是**按位置**传参的 ——
+结果是 `content_iv` 被写入了明文长度（16）、`created_at` 被写入了 IV 字符串、`plaintext_size_bytes`
+被写入了时间戳。这正是 P5 阶段同类错误的重复（批量 UPDATE 混用 `?N`/`?`）。
+现在占位符顺序与绑定顺序一致，并在代码里写明了原因。
+
+**`apps/worker` 195 测试**（新增 5：IV 落库、缺 IV 拒绝、明文/密文不一致拒绝、声明大小不符仍拒绝、
+以及**字节往返** —— 用带 `NETSCAPE2.0` 循环扩展的 GIF 头验证内容**未被重新编码**，
+这是「动画不会被压平」的可测代理）。
+
+**仍未接线**：客户端尚未把上传的字节用 DEK 加密后发送（`src/data/attachments-client.ts` 字段已对齐契约，
+但加密调用与界面接线未完成），因此图片粘贴/拖放**仍会明确报告该缺口**，不会上传明文。

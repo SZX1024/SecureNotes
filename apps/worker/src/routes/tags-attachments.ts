@@ -103,6 +103,9 @@ const metadataSchema = z
     name: envelopeSchema,
     contentType: z.string().min(3).max(128),
     sizeBytes: z.number().int().min(1),
+    // The content envelope (§7): without these the uploaded bytes are unreadable.
+    contentIv: z.string().min(16).max(24),
+    plaintextSizeBytes: z.number().int().min(1),
   })
   .strict();
 
@@ -145,6 +148,8 @@ attachmentRoutes.post("/attachments", requireSession(), requireCsrf(), async (c)
       name: metadata.data.name,
       contentType: metadata.data.contentType,
       sizeBytes: metadata.data.sizeBytes,
+      contentIv: metadata.data.contentIv,
+      plaintextSizeBytes: metadata.data.plaintextSizeBytes,
       blob: bytes,
     },
     Date.now(),
