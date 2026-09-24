@@ -1,4 +1,11 @@
-import { MAX_ATTACHMENT_BYTES, deriveKek, generateDekRaw, importDek } from "@securenotes/shared";
+import {
+  CSRF_COOKIE_NAME,
+  CSRF_HEADER_NAME,
+  MAX_ATTACHMENT_BYTES,
+  deriveKek,
+  generateDekRaw,
+  importDek,
+} from "@securenotes/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { encryptAttachmentBytes, uploadAttachment } from "./attachments-client";
@@ -259,5 +266,67 @@ describe("reference counting (§12)", () => {
 
     expect(result).toEqual({ linked: 0, unlinked: 0 });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("session requirements (§14)", () => {
+  it("sends the CSRF header, which a raw fetch does not inherit", async () => {
+    // The regression: the upload used a plain fetch and set no CSRF header, so every
+    // upload failed even with a valid session.
+    const original = document.cookie;
+    // The real cookie name, not a guess: a wrong name here would make the test pass or
+    // fail for a reason unrelated to the code under test.
+    document.cookie = `${CSRF_COOKIE_NAME}=token-value`;
+    let sent: Headers | null = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        sent = new Headers(init.headers);
+        return new Response(
+          JSON.stringify({ ok: true, data: { attachment: { id: "att-csrf" } } }),
+          {
+            status: 201,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }),
+    );
+
+    try {
+      await uploadAttachment({
+        file: imageFile(new Uint8Array([1, 2, 3])),
+        dek: await testDek(),
+        keyVersion: 1,
+        attachmentId: "att-csrf",
+      });
+
+      expect(sent!.get(CSRF_HEADER_NAME)).toBe("token-value");
+    } finally {
+      document.cookie = original;
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("reports an expired session as 401 so the caller can ask for a sign-in", async () => {
+    // Unlocking offline with the device key never contacts the server, so the session can
+    // be gone while the editor still works — the upload is where it surfaces.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ ok: false, error: { code: "UNAUTHENTICATED" } }), {
+            status: 401,
+          }),
+      ),
+    );
+
+    await expect(
+      uploadAttachment({
+        file: imageFile(new Uint8Array([1])),
+        dek: await testDek(),
+        keyVersion: 1,
+        attachmentId: "att-401",
+      }),
+    ).rejects.toMatchObject({ status: 401 });
   });
 });

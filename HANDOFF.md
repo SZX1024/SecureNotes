@@ -856,3 +856,48 @@ VITE_API_TARGET=http://127.0.0.1:8791 pnpm dev:web      # http://localhost:5173
 **未完成**：`App.tsx` 中「保留格式」分支与提示框按钮**尚未接到这个转换器**（我两次尝试写入 `App.tsx`
 都因替换锚点/正则问题中止，好在**中止发生在写盘之前**，所以 `App.tsx` 始终等于已提交状态，没有留下半成品）。
 图片粘贴/拖放、纯文本粘贴、引用管理都已经可用；只剩「网页富文本 → Markdown」这一步的接线。
+
+## 20. 用户测试反馈与修复（3 个真实缺陷）
+
+用户按测试文档在浏览器验收后发现：Preview 渲染**正确**，但**图片操作、块级公式与 Mermaid、WYSIWYG 编辑预览**有问题。
+
+### 20.1 图片/上传失败：两个叠加的缺陷（已修）
+
+worker 日志给出确证：`POST /api/v1/attachments → 401 Unauthorized`（4 次）。
+
+1. **上传客户端根本没发 CSRF 头**。`requireCsrf` 对任何非安全方法都要求 `x-csrf-token`，而
+   `apiRequest` 会自己读 cookie 设置它 —— 我用**裸 `fetch`** 上传，`input.headers` 是 `undefined`，
+   于是**任何上传都会失败**（有效会话下会是 403，无效会话下 401）。现已改为与 `apiRequest` 同样
+   从 cookie 读 CSRF 并设置头，并**导出了 `readCsrfToken`** 复用同一份逻辑。
+2. **离线解锁后的会话过期会让上传静默失败**。403 之外的真实场景：用户用**设备密钥离线解锁**
+   （不联网），而服务端会话早已因 40 分钟滑动窗口过期 —— 笔记可编辑，但上传必然 401。
+   现已把 401 识别为独立结果：**引导重新登录**（走已有的 `handleRevocation`）并给出明确提示，
+   而不是丢一句泛化错误。
+
+**回归测试**：断言上传确实带上 CSRF 头（用 shared 里真实的 `CSRF_COOKIE_NAME`/`CSRF_HEADER_NAME`，
+不硬编码 —— 硬编码正是让测试「因无关原因通过」的原因）；断言 401 以 `status: 401` 抛出。
+
+### 20.2 Mermaid 图坏掉：`foreignObject` 与内联样式（已修）
+
+- **根因**：Mermaid 默认 `htmlLabels: true`，把标签画在 `<foreignObject>` 里；而我的 SVG 净化
+  **专门删除 `foreignObject`**（它能内嵌任意 HTML）。于是**图的标签全部消失**。
+  已配置 `htmlLabels: false` + `flowchart.htmlLabels: false`，标签改用 `<text>`（无此风险）。
+- 第二个原因：Mermaid 用**内联 `style`** 给节点上色与定位（`fill`/`stroke`/`font-family`/`text-anchor`…），
+  而我的 CSS 允许列表只服务普通排版 —— 这些被剥掉后图**能画但明显坏**。已加入一组
+  **纯表现性 SVG 属性**；`url(` 仍然在任何属性取值之前就被拒绝，所以它们**无法发起请求**。
+
+### 20.3 尚未修复（用户同样报告的两项，我明确不假装完成）
+
+1. **iframe / YouTube 嵌入不成功**：§12 要求「任意 HTTPS iframe」可用且被隔离。
+   我实现了 `sanitizeEmbed` 的**隔离策略**，但**没有把它接进 Markdown 管线** ——
+   `sanitizeHtml` 的 `FORBIDDEN_TAGS` 里含 `iframe`，所以笔记里的 iframe **被直接删除**。
+   下一步：让 iframe 走一条仅允许 HTTPS、强制 `sandbox`（**绝不含 `allow-same-origin`**）与
+   `no-referrer` 的专用通道，并相应改写净化测试（现有测试断言的是「iframe 一律删除」这一过严策略）。
+2. **WYSIWYG 编辑时公式/Mermaid 不渲染**：Milkdown 只装了 `commonmark` + `gfm` preset，
+   **没有数学与 Mermaid 插件**，所以编辑器里公式就是原始 `$...$` 文本、Mermaid 就是代码块。
+   这是**配置缺口**而非 bug，需要加 Milkdown 的数学插件（或在编辑器里用只读渲染组件），
+   属于下一步工作。
+3. **块级公式**：用户在 Preview 中报告有问题。我在 jsdom 中实测块级公式确实生成了 KaTeX
+   （`katex` 标记 5 处），但 jsdom 无布局引擎，**我无法确认视觉呈现**（例如是否居中成块）。
+   需要你在浏览器里再看一次；若仍有问题，请把 Preview 里那一行的**实际外观**（或 Elements 里的
+   片段）给我。

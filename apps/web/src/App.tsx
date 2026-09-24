@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { apiRequest, ApiError } from "./api/client";
+import { ApiError, apiRequest } from "./api/client";
 import {
   enrolAccount,
   forgetLocalKeys,
@@ -284,7 +284,7 @@ export function App() {
       await refresh(db, account);
       setMessage("Saved locally and queued for sync.");
     });
-  }, [db, account, draft, refresh, runRequest]);
+  }, [db, account, draft, refresh, runRequest, openedRefs]);
 
   const createNote = useCallback(async () => {
     if (!db || !account) {
@@ -366,11 +366,18 @@ export function App() {
           await syncAttachmentLinks(noteId, [uploaded.id], []);
           setMessage("Image encrypted and attached.");
         } catch (error) {
+          if (error instanceof ApiError && error.status === 401) {
+            // The device key can unlock offline, so a note is editable while the server
+            // session has already expired; attaching needs the session back.
+            await handleRevocation();
+            setMessage("Your session expired. Sign in again to attach images.");
+            return;
+          }
           setMessage(error instanceof Error ? error.message : "The upload failed.");
         }
       }
     },
-    [account, draft],
+    [account, draft, handleRevocation],
   );
 
   /** Applies the paste rules (§12). */

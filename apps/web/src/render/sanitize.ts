@@ -246,6 +246,19 @@ const ALLOWED_CSS: Readonly<Record<string, (value: string) => boolean>> = {
   "vertical-align": (value) =>
     /^(baseline|top|middle|bottom|sub|super|text-top|text-bottom)$/.test(value),
   opacity: (value) => /^(0|1|0?\.\d+)$/.test(value),
+  "fill-opacity": (value) => /^(0|1|0?\.\d+)$/.test(value),
+  "stroke-opacity": (value) => /^(0|1|0?\.\d+)$/.test(value),
+  // Presentational SVG properties. Mermaid colours and positions its output with inline
+  // styles, and stripping these left diagrams rendered but visibly broken. None of them
+  // can fetch anything: `url(` is rejected before any property's value is inspected.
+  fill: isSimpleColor,
+  stroke: isSimpleColor,
+  "stroke-width": (value) => /^\d{1,3}(\.\d+)?(px)?$/.test(value),
+  "stroke-dasharray": (value) => /^[\d\s,.]+$/.test(value),
+  "font-family": (value) => /^[\w\s,"'-]{1,80}$/.test(value),
+  "text-anchor": (value) => /^(start|middle|end)$/.test(value),
+  "dominant-baseline": (value) =>
+    /^(auto|middle|central|hanging|text-top|text-bottom)$/.test(value),
 };
 
 function isSimpleColor(value: string): boolean {

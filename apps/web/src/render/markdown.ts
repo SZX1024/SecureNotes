@@ -96,7 +96,15 @@ export async function renderMermaidBlocks(container: ParentNode): Promise<number
   }
 
   const mermaid = (await import("mermaid")).default;
-  mermaid.initialize({ startOnLoad: false, securityLevel: "strict" });
+  mermaid.initialize({
+    startOnLoad: false,
+    securityLevel: "strict",
+    // `htmlLabels: true` is the default and draws labels inside `<foreignObject>`, which
+    // the SVG sanitizer removes because it can embed arbitrary HTML — so the default made
+    // every diagram render without its labels. `<text>` labels carry no such risk.
+    htmlLabels: false,
+    flowchart: { htmlLabels: false },
+  });
 
   const { sanitizeSvg } = await import("./sanitize");
   let rendered = 0;

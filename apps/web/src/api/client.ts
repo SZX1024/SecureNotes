@@ -59,7 +59,7 @@ function isSuccessBody(value: unknown): value is { ok: true; data: unknown } {
 }
 
 /** Reads the double-submit CSRF token; absent until a session is established. */
-function readCsrfToken(): string | null {
+export function readCsrfToken(): string | null {
   const pattern = new RegExp(`(?:^|; )${CSRF_COOKIE_NAME}=([^;]*)`);
   const match = pattern.exec(document.cookie);
   return match?.[1] ? decodeURIComponent(match[1]) : null;

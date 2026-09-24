@@ -6,7 +6,9 @@ import {
   type Bytes,
 } from "@securenotes/shared";
 
-import { ApiError, apiRequest } from "../api/client";
+import { CSRF_HEADER_NAME } from "@securenotes/shared";
+
+import { ApiError, apiRequest, readCsrfToken } from "../api/client";
 import { attachmentMarkdown } from "../editor/attachments";
 
 /**
@@ -102,10 +104,18 @@ export async function uploadAttachment(input: AttachmentUploadInput): Promise<Up
     new File([ciphertext as BlobPart], "blob", { type: "application/octet-stream" }),
   );
 
+  // The CSRF header is required for any unsafe method, and a raw `fetch` does not inherit
+  // it from the JSON client — omitting it made every upload fail.
+  const headers = new Headers(input.headers);
+  const csrf = readCsrfToken();
+  if (csrf !== null) {
+    headers.set(CSRF_HEADER_NAME, csrf);
+  }
+
   const response = await fetch("/api/v1/attachments", {
     method: "POST",
     body: form,
-    headers: input.headers,
+    headers,
     credentials: "same-origin",
   });
 
@@ -114,6 +124,11 @@ export async function uploadAttachment(input: AttachmentUploadInput): Promise<Up
     | { ok: false; error: { code: string } }
     | null;
 
+  if (response.status === 401) {
+    // Uploading needs a live session even when the app was unlocked offline with the
+    // device key, so this is a distinct outcome the caller must surface by name.
+    throw new ApiError("UNAUTHENTICATED", 401);
+  }
   if (response.status === 413) {
     throw new Error(
       `Each file must be under ${Math.round(MAX_ATTACHMENT_BYTES / (1024 * 1024))} MB.`,
