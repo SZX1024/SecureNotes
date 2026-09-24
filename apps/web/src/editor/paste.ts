@@ -112,3 +112,23 @@ export function decideDrop(files: readonly { type: string; size: number }[]): Dr
 export function formatMegabytes(bytes: number): string {
   return `${Math.round(bytes / (1024 * 1024))} MB`;
 }
+
+/** Where a remembered rich-text decision is kept. Local UI state, never synced. */
+export const RICH_TEXT_STORAGE_KEY = "securenotes.rich-text-paste";
+
+export interface PreferenceStorage {
+  getItem: (key: string) => string | null;
+  setItem: (key: string, value: string) => void;
+}
+
+export function loadRichTextPreference(storage: PreferenceStorage): RichTextPreference {
+  const stored = storage.getItem(RICH_TEXT_STORAGE_KEY);
+  return stored === "html" || stored === "plain" ? stored : null;
+}
+
+export function saveRichTextPreference(
+  storage: PreferenceStorage,
+  preference: Exclude<RichTextPreference, null>,
+): void {
+  storage.setItem(RICH_TEXT_STORAGE_KEY, preference);
+}

@@ -842,3 +842,17 @@ VITE_API_TARGET=http://127.0.0.1:8791 pnpm dev:web      # http://localhost:5173
 
 **测试**：`syncAttachmentLinks` 精确调用「该链的链、该解的解」（断言 URL 与 method）；
 一个 404 不阻断其余；文本没变时**一次请求都不发**。
+
+### 19.9 富文本转 Markdown：转换器已交付，**界面接线未完成**
+
+`src/editor/rich-text.ts` 的 `htmlToMarkdown(html)`：**先净化、后转换**（§12「Any HTML path must be sanitized」）。
+顺序是安全要害：先转换后净化等于相信转换器没把危险内容带进 Markdown，而 Markdown **本身能表达原始 HTML**
+—— 幸存下来的 `<script>` 会被笔记自己重新引入。`service.keep([])` 明确不保留任何原样 HTML。
+
+已测试：标题/列表/粗斜体/链接/图片/**表格（依赖 GFM 插件）**/代码围栏转换正确；
+`<script>`、`onerror`、`style url(...)`、`javascript:` 链接、`iframe`/`svg onload`/`math` **全部不进入结果**；
+结果中**不含任何 HTML 标签**；空输入返回空串。粘贴偏好（`loadRichTextPreference`/`saveRichTextPreference`）也已有测试。
+
+**未完成**：`App.tsx` 中「保留格式」分支与提示框按钮**尚未接到这个转换器**（我两次尝试写入 `App.tsx`
+都因替换锚点/正则问题中止，好在**中止发生在写盘之前**，所以 `App.tsx` 始终等于已提交状态，没有留下半成品）。
+图片粘贴/拖放、纯文本粘贴、引用管理都已经可用；只剩「网页富文本 → Markdown」这一步的接线。
