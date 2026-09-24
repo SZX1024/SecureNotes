@@ -1,4 +1,4 @@
-import { API_PREFIX } from "@securenotes/shared";
+import { API_PREFIX, type CryptoEnvelope } from "@securenotes/shared";
 import { env, SELF } from "cloudflare:test";
 
 import type { Env } from "../src/env";
@@ -157,6 +157,19 @@ export interface LoginData {
 
 export interface SessionListEntry extends SessionDto {
   current: boolean;
+}
+
+/** A note as the API returns it: an opaque envelope plus structural metadata. */
+export interface NoteDto {
+  id: string;
+  folderId: string | null;
+  revision: number;
+  payload: CryptoEnvelope;
+  pinned: boolean;
+  sortOrder: number;
+  deletedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface TestAccount {

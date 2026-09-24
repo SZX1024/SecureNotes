@@ -487,3 +487,39 @@ logout 带 CSRF   → 200，2 个 Cookie 被清除（Max-Age=0）
 - 应用外壳目前仍是 P0 的连通性展示页；真实三栏 UI 与编辑器属 P5/P6。
 - `manifest.webmanifest` 仍是占位（PNG 图标、更多尺寸）——P9 前补。
 - `App.tsx` 尚未接入 KeyStore/解锁界面（需要登录流程与数据域，P5）。
+
+## 16. P5 第 1 批（notes API，本次交付）— **P5 未完成**
+
+### 16.1 本批已交付
+
+| 文件                                  | 内容                                                                                      |
+| ------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `apps/worker/src/services/records.ts` | `syncChangeStatement`（同步变更/墓碑写入）、`pruneRevisionHistory`（保留当前 + 10 历史）  |
+| `apps/worker/src/services/notes.ts`   | 创建/读取/乐观锁更新/软删除/恢复/永久删除/历史列表/历史恢复为新当前版本                   |
+| `apps/worker/src/routes/notes.ts`     | `/api/v1/notes...`、`/api/v1/recycle-bin`（全部 `requireSession` + 写操作 `requireCsrf`） |
+| `apps/worker/test/notes.test.ts`      | **17 个测试**                                                                             |
+
+已实现并测试的不变量：
+
+- **乐观锁（§27）**：`WHERE id=? AND revision=?` 命中才更新，过期基数返回 `REVISION_CONFLICT`，且原内容不被覆盖。
+- **历史（§9/§18）**：notes.revision 恒等于最新 note_revisions.revision；恢复历史**追加**新当前版本而非回退；上限为「当前 1 + 历史 10」，超限永久删最旧并从同步流发出 delete。
+- **回收站（§19）**：软删除保留 id/revision/历史；恢复不丢历史；永久删除清除当前与全部历史（并对 `note_attachments` 做 RESTRICT 前置处理与引用计数回退）。
+- **同步流（§16）**：create/update/delete 各写一行 `sync_changes`，`seq` 严格递增（游标不会漏）。
+- **授权（§26）**：所有路由按 `user_id` 限定；他人 note id 一律 404，且不出现在列表中。
+- 请求体严格校验：意外的 `title`/`body` 字段会被**拒绝**（不是忽略），确保服务端永不接受明文标题。
+
+### 16.2 P5 **尚未完成**的部分（下一会话请从这里继续）
+
+1. **folders API**：加密名称、父关系、**深度 ≤10 强制**、子树软删除/恢复、手动排序（`sort_order`）。
+2. **tags API**：扁平 + 加密名称、`note_tags` 多对多、**每笔记 ≤10**、删除只删关系。
+3. **attachments API**：multipart 上传到 R2、`image/*` 与 ≤20MB 校验、引用计数、**归零后异步幂等删除 R2**、`note_attachments` 链接端点。
+4. **回收站 30 天 Cron 清理**（`purgeExpired*` 模式已有先例；tombstone 30 天同理由此清理）。
+5. **客户端数据层**：Dexie 仓储（加密后写入）、把每次改动 `enqueueChange` 入队。
+6. **搜索（§11）**：解锁后在内存用 MiniSearch 建索引（标题/正文/标签/文件夹/附件信息），精确 + 模糊 + 高亮，**索引绝不持久化**。
+7. **UI（用户明确要求 P5 一并交付）**：三栏布局（文件夹/标签 | 列表 | 编辑器）、排序（最近修改/创建时间/标题/手动）、置顶、最近打开、全局搜索快捷键、命令面板、键盘快捷键。**编辑器本体属 P6**（Milkdown/CodeMirror），P5 的编辑面先用简单文本域。
+8. **解锁与登录界面**：把 `KeyStore` 与 `GET /key-material` 接起来（P4 只交付了底座）。
+
+### 16.3 提示下一会话
+
+- 新增数据路由请沿用本批模式：`requireSession` + 写操作 `requireCsrf`、Zod `.strict()`、所有查询带 `user_id`、每次变更写 `sync_changes`。
+- 清点类测试请用 `apps/worker/test/notes.test.ts` 作为模板（含 IDOR 与同步流断言）。
