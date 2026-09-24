@@ -21,6 +21,7 @@ import type { SecureNotesDatabase } from "./local/schema";
 import { NoteSearchIndex, highlightSegments } from "./search";
 import { defaultEditorMode, loadEditorMode, saveEditorMode, type EditorMode } from "./editor/mode";
 import { decideDrop, decidePaste } from "./editor/paste";
+import { uploadAttachment } from "./data/attachments-client";
 import {
   loadThemePreference,
   nextThemePreference,
@@ -301,6 +302,45 @@ export function App() {
    * Text goes in; an image or a rich-text conversion needs a path that does not exist
    * yet, and saying so is better than pretending the paste was handled.
    */
+  /**
+   * Uploads images and appends a reference to each one.
+   *
+   * The bytes are encrypted by `uploadAttachment` before they leave the browser, and the
+   * reference is only inserted after the server has confirmed it stored the object — so a
+   * failed upload leaves no reference pointing at nothing.
+   */
+  const uploadImages = useCallback(
+    async (files: readonly File[]) => {
+      if (!account || !draft) {
+        return;
+      }
+      const noteId = draft.id;
+      for (const file of files) {
+        try {
+          const uploaded = await uploadAttachment({
+            file,
+            dek: account.dek,
+            keyVersion: account.keyVersion,
+            attachmentId: crypto.randomUUID(),
+          });
+          setDraft((current) =>
+            current && current.id === noteId
+              ? {
+                  ...current,
+                  body: `${current.body}${current.body.endsWith("\n") || current.body.length === 0 ? "" : "\n"}${uploaded.markdown}\n`,
+                }
+              : current,
+          );
+          setMessage("Image encrypted and attached.");
+        } catch (error) {
+          setMessage(error instanceof Error ? error.message : "The upload failed.");
+        }
+      }
+    },
+    [account, draft],
+  );
+
+  /** Applies the paste rules (§12). */
   const handlePaste = useCallback(
     (event: React.ClipboardEvent) => {
       const decision = decidePaste({
@@ -320,32 +360,33 @@ export function App() {
       } else if (decision.kind === "ask-rich-text") {
         setPastePrompt({ html: decision.html, text: decision.text });
       } else if (decision.kind === "attach-image") {
-        setMessage(
-          "Image paste is not wired yet: the API has no field for an attachment's envelope (HANDOFF §19.6).",
-        );
+        void uploadImages([decision.file]);
       } else if (decision.kind === "insert-html") {
         setMessage("Sanitised rich-text conversion is not wired yet (HANDOFF §19.6).");
       } else {
         setMessage(decision.reason);
       }
     },
-    [insertIntoDraft, richTextPreference],
+    [insertIntoDraft, richTextPreference, uploadImages],
   );
 
   /** Applies the drop rules (§12: images only, with a size limit). */
-  const handleDrop = useCallback((event: React.DragEvent) => {
-    const files = [...(event.dataTransfer?.files ?? [])];
-    event.preventDefault();
-    if (files.length === 0) {
-      return;
-    }
-    const decision = decideDrop(files);
-    setMessage(
-      decision.kind === "reject"
-        ? decision.reason
-        : "Image drop is not wired yet: the API has no field for an attachment's envelope (HANDOFF §19.6).",
-    );
-  }, []);
+  const handleDrop = useCallback(
+    (event: React.DragEvent) => {
+      const files = [...(event.dataTransfer?.files ?? [])];
+      event.preventDefault();
+      if (files.length === 0) {
+        return;
+      }
+      const decision = decideDrop(files);
+      if (decision.kind === "reject") {
+        setMessage(decision.reason);
+        return;
+      }
+      void uploadImages(decision.files);
+    },
+    [uploadImages],
+  );
 
   const commands = useMemo<Command[]>(
     () =>
