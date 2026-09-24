@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { apiRequest, ApiError } from "./api/client";
 import {
@@ -18,6 +18,7 @@ import {
 import { openAppDatabase } from "./local/migrations";
 import { KeyStore } from "./local/key-store";
 import type { SecureNotesDatabase } from "./local/schema";
+import { renderMarkdown, renderMermaidBlocks } from "./render/markdown";
 import { NoteSearchIndex, highlightSegments } from "./search";
 import {
   buildCommands,
@@ -59,6 +60,7 @@ export function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState("");
   const [sidebarVisible, setSidebarVisible] = useState(true);
+  const [preview, setPreview] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
   // Held as state rather than refs: the render path reads both, and reading a ref
@@ -528,18 +530,26 @@ export function App() {
               aria-label="Note title"
               onChange={(event) => setDraft({ ...draft, title: event.target.value })}
             />
-            <textarea
-              className="note-body"
-              value={draft.body}
-              aria-label="Note body"
-              onChange={(event) => setDraft({ ...draft, body: event.target.value })}
-            />
+            {preview ? (
+              <MarkdownPreview title={draft.title} body={draft.body} />
+            ) : (
+              <textarea
+                className="note-body"
+                value={draft.body}
+                aria-label="Note body"
+                onChange={(event) => setDraft({ ...draft, body: event.target.value })}
+              />
+            )}
             <footer>
               <button type="button" className="primary" onClick={() => void saveDraft()}>
                 Save (Ctrl+S)
               </button>
+              <button type="button" onClick={() => setPreview((current) => !current)}>
+                {preview ? "Edit" : "Preview"}
+              </button>
               <span className="muted">
-                Stored encrypted on this device and queued for sync. The editor arrives in P6.
+                Stored encrypted on this device and queued for sync. The WYSIWYG editor arrives in
+                P6.
               </span>
             </footer>
           </>
@@ -585,6 +595,32 @@ export function App() {
       )}
     </main>
   );
+}
+
+/**
+ * Renders a note's Markdown (§12).
+ *
+ * `dangerouslySetInnerHTML` is used because the content *is* HTML by the time it
+ * gets here — but only after `renderMarkdown`, which runs the whole document through
+ * `sanitizeHtml`. Nothing else in the app is inserted this way, and the sanitizer is
+ * the reason this one is acceptable.
+ */
+function MarkdownPreview({ title, body }: { title: string; body: string }) {
+  const container = useRef<HTMLDivElement>(null);
+  const html = useMemo(
+    () => renderMarkdown(title.trim().length > 0 ? `# ${title}\n\n${body}` : body),
+    [title, body],
+  );
+
+  useEffect(() => {
+    // Mermaid is rendered after insertion and its SVG is sanitised before it goes in
+    // (§12: Markdown -> Mermaid -> SVG -> sanitizer -> DOM).
+    if (container.current) {
+      void renderMermaidBlocks(container.current);
+    }
+  }, [html]);
+
+  return <div className="preview" ref={container} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
 /** Highlights search terms as plain text: no markup is ever injected (§11). */

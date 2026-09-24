@@ -189,3 +189,33 @@ button.primary {
   border: 0;
   cursor: pointer;
 }
+
+.preview {
+  flex: 1;
+  min-height: 12rem;
+  padding: 0.25rem 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+}
+
+.preview table {
+  border-collapse: collapse;
+}
+
+.preview th,
+.preview td {
+  padding: 0.2rem 0.5rem;
+  border: 1px solid var(--border);
+}
+
+.preview pre {
+  padding: 0.5rem;
+  overflow: auto;
+  background: color-mix(in srgb, currentColor 7%, transparent);
+  border-radius: 0.4rem;
+}
+
+.mermaid-diagram svg {
+  max-width: 100%;
+}

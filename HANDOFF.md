@@ -659,7 +659,7 @@ VITE_API_TARGET=http://127.0.0.1:8791 pnpm dev:web      # http://localhost:5173
   已记录为后续项。
 - 本地 D1 已重置为首运行状态，你打开浏览器应看到 **First run**。
 
-## 19. P6 第 1 批：渲染安全（本次交付）— **P6 未完成**
+## 19. P6 第 1-2 批：渲染安全 + Markdown 管线 — **P6 未完成**
 
 ### 19.1 交付物
 
@@ -685,6 +685,21 @@ VITE_API_TARGET=http://127.0.0.1:8791 pnpm dev:web      # http://localhost:5173
 - 嵌入：**sandbox 含 `allow-scripts` 但绝不含 `allow-same-origin`**，`no-referrer`，无权限；仅 HTTPS。
 - 净化**幂等**（二次净化结果相同），并有经典变异的绕过测试（`<scr<script>ipt>`、`<math><mtext><script>`、`noscript` 属性逃逸、`&#106;avascript:` 等）。
 - 外壳 CSP：`script-src 'self'`（**无 inline/eval**）、`object-src 'none'`、`frame-ancestors 'none'`、`img-src https: data:`、`frame-src https:`、`style-src 'self' 'unsafe-inline'`（KaTeX/Mermaid/净化后的 style 属性需要）、`connect-src 'self'`。
+
+### 19.3b 第 2 批：Markdown 渲染管线（`src/render/markdown.ts` + `markdown.test.ts`，18 测试）
+
+- **一条管线两个方向**：编辑与渲染共用同一组 remark 插件（`remark-parse`/`remark-gfm`/`remark-math`），
+  所以「存进去的」与「显示出来的」不会分叉。
+- **round-trip（§12）**：`:::note` 这类未知扩展**原样保留**；内联自定义语法即使序列化器加了转义
+  （`[value]` → `\[value\]`），也断言**渲染结果相同**且**二次序列化稳定**——这比强行要求字节相同更诚实。
+- **KaTeX**：`rehype-katex` + `trust:false`，测试断言 `\htmlData`/`\href{javascript:…}` **不产生标记**，
+  且 TeX 原文被消费（`class="katex"` 存在、`a^2 + b^2` 不再作为文本出现）。
+- **Mermaid**：`renderMermaidBlocks` 走 §12 指定的 `Markdown → Mermaid → SVG → 净化 → DOM`；
+  渲染失败的块**保留原始文本**（坏图不能删掉作者写的内容）；无 mermaid 块时不做任何事。
+- **敌意 Markdown（§31）**：8 类向量（`<img onerror>`、`javascript:` 链接、`data:` 图片、`<iframe>`、
+  `<svg onload>`、内联 `<style>` 等）渲染后**无活动内容**；代码块内的 `<script>` 被转义为文本。
+- **已接入界面**：编辑器新增 **Preview** 开关，渲染经 `renderMarkdown` + `renderMermaidBlocks`，
+  是仓库里**唯一**使用 `dangerouslySetInnerHTML` 的地方（净化是它可接受的理由）。
 
 ### 19.4 P6 尚未完成（下一批）
 
