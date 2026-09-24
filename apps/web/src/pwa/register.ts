@@ -48,6 +48,14 @@ export async function registerServiceWorker(
     return null;
   }
 
+  // Registered only for the built app. In development the worker would sit between the page and
+  // the dev server and serve stale modules: when Vite re-optimised its dependencies, the lazily
+  // imported renderer never loaded and the preview never appeared. A service worker in front of a
+  // dev server buys nothing and costs exactly that.
+  if (!import.meta.env.PROD) {
+    return null;
+  }
+
   const registration = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
 
   const notify = (status: UpdateStatus) => options.onStatusChange?.(status);

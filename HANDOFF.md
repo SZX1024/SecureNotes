@@ -986,3 +986,34 @@ Markdown source** —— 空白面板对用户没有任何可操作信息。
 与无 title 的链接、无 alt 的图片、以及**整份功能测试文档**（断言不仅挂载成功，而且
 **`console.error` 一条都没有**、公式就地渲染、各段文字都在）。**如果这个测试早存在，这个 bug
 根本不会交付出去。**
+
+## 21. Preview 在浏览器里彻底不渲染：**Service Worker 缓存了开发环境的模块**（本批，用户报告）
+
+**用户报告**：「preview 也渲染不出来了」。而我的 jsdom 探针**一直显示 Preview 正常**（测试文档渲染出 9671 字符、
+5 处 KaTeX、17 处高亮）—— 这个矛盾本身就是线索：**问题不在渲染代码，而在开发环境的模块加载**。
+
+**根因（是我的错）**：`public/sw.js` 对所有同源非 API 请求做 **cache-first**：
+
+```js
+event.respondWith(caches.match(request).then((cached) => cached ?? fetch(request)));
+```
+
+而 `main.tsx` **在开发环境也无条件注册了 Service Worker**。于是我引入 `katex` 与 `@milkdown/kit/prose/*` 时，
+Vite 日志出现 `optimized dependencies changed. reloading`（依赖重新预打包 → 模块 URL 变化），
+**SW 继续返回缓存的旧模块** → 懒加载的 `import("./render/markdown")` 拿不到 → **Preview 永远停在「Rendering…」**。
+普通刷新无效（SW 会再拦一次），终端里**没有任何报错**——这正是它难查的原因。
+
+**修复**：
+
+1. `register.ts`：**仅在生产构建注册**（`import.meta.env.PROD`），开发环境直接 `return null`。
+   在开发服务器前面放一个 Service Worker **没有任何收益**，代价就是这个。
+2. `sw.js` 重写：**网络优先**（网络是真相，缓存只用于离线兜底）；**永不拦截** `/src/`、`/@vite/`、`/@id/`、
+   `/@fs/`、`/node_modules/`、`/sw.js`；`/api/*` 照旧完全不碰；导航失败时才回退到 `/index.html`；
+   `skipWaiting` **只在页面发消息时**触发（更新不得在编辑器运行中换掉代码）。
+
+**测试** `src/pwa/service-worker.test.ts`（静态审计 + 注册守卫，6 测试）：断言**不存在**全量 cache-first 逻辑、
+开发模块路径被排除、API 不被缓存、导航兜底仍在、**install/activate 里没有 skipWaiting**（只有 message 里允许），
+以及**开发环境下 `registerServiceWorker` 返回 null 且不触碰浏览器 API**。
+
+**教训**：我的测试全跑在 Node/jsdom 里，**没有一处覆盖「浏览器如何加载这些模块」**。这类缺陷只有真实浏览器会暴露，
+而我又恰恰在开发环境引入了 SW 这个中间层。
