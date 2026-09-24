@@ -956,3 +956,33 @@ worker 日志给出确证：`POST /api/v1/attachments → 401 Unauthorized`（4 
 decoration 渲染 —— 测试断言 **DOM 里出现 `class="katex"`**、原文 `$a^2 + b^2 = c^2$` **仍在**、
 且源码区间带隐藏类。这比之前「WYSIWYG 完全无法验证」前进了一步；不过**视觉效果（对齐、间距、
 光标行为）仍需你在浏览器确认**。
+
+### 20.6 WYSIWYG「渲染完全坏了」：带图片的笔记打不开（本批，用户报告）
+
+**现象**：用户报「现在渲染完全坏了」。我先复现再定位 —— **Preview 完全正常**（测试文档渲染出
+9671 字符、10 个 h1、5 处 KaTeX、27 处高亮），所以坏的只是 **WYSIWYG 编辑器**。
+
+**根因**（不在最近这批改动里，而是 P6 第 3 批就存在）：
+
+```
+RangeError: Expected value of type string for attribute title on type image, got null
+```
+
+`![alt](url)` 不带 title 时，mdast 里 `title` 是 `null`，而 Milkdown 的 image 节点把 `title`
+声明为 string —— 转换抛错，**整个编辑器渲染不出来**。所以**任何含图片的笔记在 WYSIWYG 里都打不开**；
+`alt` 缺失同样会失败。用户贴过附件图片，因此命中。
+
+**为什么我的测试没抓到**：P6 第 3 批的 WYSIWYG 测试**只用了文字与公式，从未包含图片**。
+这是测试设计的漏洞，不是覆盖不足的借口。
+
+**修复**：`src/editor/missing-titles.ts` —— 一个 remark 插件，在**转换之前**把 `image`/`link`
+缺失的 `title` 规范为 `""`（`image` 的 `alt` 同样处理）。选择在语法树上规范化而**不是重写笔记的
+Markdown**：存储文本保持作者写的样子，而「没有 title」的含义就是空串。
+
+**另外加了一道防线**：编辑器创建失败时不再留一个空白面板，而是**显示可读的原因并提示改用
+Markdown source** —— 空白面板对用户没有任何可操作信息。
+
+**回归测试** `src/editor/wysiwyg-documents.test.tsx`（4 测试）：无 title 的图片、有 title 的图片
+与无 title 的链接、无 alt 的图片、以及**整份功能测试文档**（断言不仅挂载成功，而且
+**`console.error` 一条都没有**、公式就地渲染、各段文字都在）。**如果这个测试早存在，这个 bug
+根本不会交付出去。**
