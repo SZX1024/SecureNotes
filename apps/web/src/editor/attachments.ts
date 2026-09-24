@@ -1,0 +1,64 @@
+/**
+ * Attachment references in note text (§12).
+ *
+ * An image reference uses the internal attachment id, never the original filename,
+ * so renaming a file locally cannot point a note at someone else's attachment, and the
+ * id is what the reference counting is keyed on.
+ *
+ * Removing a reference is a server-side consequence — the count drops and a
+ * zero-reference attachment enters asynchronous R2 deletion — so the client's job is
+ * to report the difference between the previous and current text accurately.
+ */
+
+export const ATTACHMENT_URL_PREFIX = "/api/v1/attachments/";
+
+const REFERENCE_PATTERN = new RegExp(`${ATTACHMENT_URL_PREFIX}([0-9a-fA-F-]{36})/content`, "g");
+
+/** The distinct attachment ids referenced by a piece of Markdown, in order. */
+export function attachmentRefsIn(markdown: string): string[] {
+  const found = new Set<string>();
+  for (const match of markdown.matchAll(REFERENCE_PATTERN)) {
+    found.add(match[1]!);
+  }
+  return [...found];
+}
+
+/**
+ * The Markdown an inserted attachment produces.
+ *
+ * The alt text is the filename the user saw, which is presentation only: the
+ * reference itself is the id.
+ */
+export function attachmentMarkdown(id: string, filename: string): string {
+  const alt = filename.replace(/[[\]]/g, "").trim();
+  return `![${alt}](${ATTACHMENT_URL_PREFIX}${id}/content)`;
+}
+
+export interface AttachmentRefDiff {
+  added: string[];
+  removed: string[];
+}
+
+/**
+ * Compares the references before and after an edit.
+ *
+ * Pure, and that matters: this is what decides which attachments gain or lose a
+ * reference, and a mistake here either deletes an image that is still in use or keeps
+ * one alive forever.
+ */
+export function diffAttachmentRefs(
+  before: readonly string[],
+  after: readonly string[],
+): AttachmentRefDiff {
+  const beforeSet = new Set(before);
+  const afterSet = new Set(after);
+  return {
+    added: [...afterSet].filter((id) => !beforeSet.has(id)),
+    removed: [...beforeSet].filter((id) => !afterSet.has(id)),
+  };
+}
+
+/** Whether a filename looks like an image the editor may attach. */
+export function isImageFilename(filename: string): boolean {
+  return /\.(png|jpe?g|gif|webp|avif|svg)$/i.test(filename);
+}

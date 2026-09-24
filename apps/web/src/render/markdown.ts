@@ -1,3 +1,4 @@
+import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
 import rehypeStringify from "rehype-stringify";
 import remarkGfm from "remark-gfm";
@@ -60,6 +61,10 @@ export function renderMarkdown(markdown: string): string {
     .use(remarkMath)
     .use(remarkRehype, { allowDangerousHtml: true })
     .use(rehypeKatex, { trust: false, throwOnError: false })
+    // Syntax highlighting runs inside this lazily-loaded pipeline, so its cost is
+    // paid only when a note is rendered. `detect: false` means an unlabelled block is
+    // not guessed at, which keeps the output predictable.
+    .use(rehypeHighlight, { detect: false, ignoreMissing: true })
     .use(rehypeStringify, { allowDangerousHtml: true })
     .processSync(markdown);
 

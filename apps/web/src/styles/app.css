@@ -254,3 +254,150 @@ button.primary {
   padding: 0.2rem 0.5rem;
   border: 1px solid var(--border);
 }
+
+/* Theme (§ requirements): an explicit choice wins over the system, applied by the
+   shell as a data attribute so the resolution rule stays in one tested function. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --border: rgb(0 0 0 / 15%);
+  --muted: rgb(0 0 0 / 60%);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --border: rgb(255 255 255 / 22%);
+  --muted: rgb(255 255 255 / 65%);
+}
+
+/* Mobile layout (§22: a separate layout, not a shrunken desktop).
+
+   On a phone there is room for one pane at a time: the folder pane becomes a
+   drawer that is closed by default, the list is the home view, and opening a note
+   replaces it with the editor. The desktop grid is untouched. */
+@media (max-width: 767px) {
+  .shell,
+  .shell.sidebar-hidden {
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr;
+  }
+
+  .pane.folders {
+    display: none;
+  }
+
+  .shell.mobile-editing .pane.list {
+    display: none;
+  }
+
+  .shell:not(.mobile-editing) .pane.editor {
+    display: none;
+  }
+
+  .pane {
+    border-right: 0;
+  }
+
+  .pane.editor {
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  }
+
+  /* Touch targets, per the platform minima. */
+  .note-list button,
+  button.primary,
+  .pane button {
+    min-height: 2.75rem;
+  }
+
+  .note-body,
+  .source-editor .cm-editor,
+  .wysiwyg-editor,
+  .preview {
+    min-height: 40vh;
+  }
+}
+
+/* Syntax highlighting tokens.
+
+   `rehype-highlight` adds highlight.js class names; without rules they render as plain
+   text, so a feature that reported itself as delivered would show no colour at all.
+   The palette is defined here rather than by importing a theme stylesheet so it follows
+   the app's own light/dark resolution. */
+.hljs-comment,
+.hljs-quote {
+  color: color-mix(in srgb, var(--muted) 90%, transparent);
+  font-style: italic;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-section,
+.hljs-doctag,
+.hljs-type,
+.hljs-name,
+.hljs-strong {
+  color: #a626a4;
+  font-weight: 600;
+}
+
+.hljs-string,
+.hljs-regexp,
+.hljs-addition,
+.hljs-attribute,
+.hljs-meta .hljs-string {
+  color: #50a14f;
+}
+
+.hljs-number,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-class .hljs-title,
+.hljs-title.class_ {
+  color: #986801;
+}
+
+.hljs-title,
+.hljs-title.function_,
+.hljs-built_in,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-link {
+  color: #4078f2;
+}
+
+.hljs-attr,
+.hljs-property,
+.hljs-selector-attr,
+.hljs-selector-class,
+.hljs-selector-id {
+  color: #c18401;
+}
+
+.hljs-deletion {
+  color: #e45649;
+}
+
+:root[data-theme="dark"] .hljs-keyword,
+:root[data-theme="dark"] .hljs-selector-tag,
+:root[data-theme="dark"] .hljs-literal,
+:root[data-theme="dark"] .hljs-type {
+  color: #c678dd;
+}
+
+:root[data-theme="dark"] .hljs-string,
+:root[data-theme="dark"] .hljs-regexp,
+:root[data-theme="dark"] .hljs-attribute {
+  color: #98c379;
+}
+
+:root[data-theme="dark"] .hljs-number,
+:root[data-theme="dark"] .hljs-variable,
+:root[data-theme="dark"] .hljs-title.class_ {
+  color: #d19a66;
+}
+
+:root[data-theme="dark"] .hljs-title,
+:root[data-theme="dark"] .hljs-title.function_,
+:root[data-theme="dark"] .hljs-built_in {
+  color: #61afef;
+}

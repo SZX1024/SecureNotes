@@ -19,7 +19,15 @@ import { openAppDatabase } from "./local/migrations";
 import { KeyStore } from "./local/key-store";
 import type { SecureNotesDatabase } from "./local/schema";
 import { NoteSearchIndex, highlightSegments } from "./search";
-import { defaultEditorMode, type EditorMode } from "./editor/mode";
+import { defaultEditorMode, loadEditorMode, saveEditorMode, type EditorMode } from "./editor/mode";
+import { decideDrop, decidePaste } from "./editor/paste";
+import {
+  loadThemePreference,
+  nextThemePreference,
+  resolveTheme,
+  saveThemePreference,
+  type ThemePreference,
+} from "./theme";
 import type { MarkdownSourceEditor as MarkdownSourceEditorType } from "./editor/MarkdownSourceEditor";
 import type { WysiwygEditor as WysiwygEditorType } from "./editor/WysiwygEditor";
 import {
@@ -77,12 +85,18 @@ export function App() {
   const [paletteQuery, setPaletteQuery] = useState("");
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const [preview, setPreview] = useState(false);
+  const [theme, setTheme] = useState<ThemePreference>(() =>
+    typeof localStorage === "undefined" ? "system" : loadThemePreference(localStorage),
+  );
+  const [richTextPreference, setRichTextPreference] = useState<"html" | "plain" | null>(null);
+  const [pastePrompt, setPastePrompt] = useState<{ html: string; text: string } | null>(null);
   const [editorMode, setEditorMode] = useState<EditorMode>(() =>
     defaultEditorMode(
       typeof window === "undefined" ? 1024 : window.innerWidth,
       typeof window !== "undefined" && typeof window.matchMedia === "function"
         ? window.matchMedia("(pointer: coarse)").matches
         : false,
+      typeof localStorage === "undefined" ? null : loadEditorMode(localStorage),
     ),
   );
   const [message, setMessage] = useState<string | null>(null);
@@ -202,6 +216,18 @@ export function App() {
     };
   }, []);
 
+  // Theme: an explicit choice wins over the system, so the attribute is set from the
+  // resolved value rather than leaving the decision to CSS.
+  useEffect(() => {
+    const prefersDark =
+      typeof window !== "undefined" && typeof window.matchMedia === "function"
+        ? window.matchMedia("(prefers-color-scheme: dark)").matches
+        : false;
+    const resolved = resolveTheme(theme, prefersDark);
+    document.documentElement.dataset["theme"] = resolved;
+    document.documentElement.style.colorScheme = resolved;
+  }, [theme]);
+
   // App Lock: check on an interval so a tab left open locks itself (§7).
   useEffect(() => {
     if (screen !== "app") {
@@ -263,6 +289,63 @@ export function App() {
       openNote(id);
     });
   }, [db, account, refresh, openNote, runRequest]);
+
+  /** Appends pasted text to the draft. */
+  const insertIntoDraft = useCallback((text: string) => {
+    setDraft((current) => (current ? { ...current, body: `${current.body}${text}` } : current));
+  }, []);
+
+  /**
+   * Applies the paste rules (§12).
+   *
+   * Text goes in; an image or a rich-text conversion needs a path that does not exist
+   * yet, and saying so is better than pretending the paste was handled.
+   */
+  const handlePaste = useCallback(
+    (event: React.ClipboardEvent) => {
+      const decision = decidePaste({
+        items: [...event.clipboardData.items].map((item) => ({
+          kind: item.kind,
+          type: item.type,
+          getAsFile: () => item.getAsFile(),
+        })),
+        html: event.clipboardData.getData("text/html") || null,
+        text: event.clipboardData.getData("text/plain") || null,
+        richTextPreference,
+      });
+
+      event.preventDefault();
+      if (decision.kind === "insert-text") {
+        insertIntoDraft(decision.text);
+      } else if (decision.kind === "ask-rich-text") {
+        setPastePrompt({ html: decision.html, text: decision.text });
+      } else if (decision.kind === "attach-image") {
+        setMessage(
+          "Image paste is not wired yet: the API has no field for an attachment's envelope (HANDOFF §19.6).",
+        );
+      } else if (decision.kind === "insert-html") {
+        setMessage("Sanitised rich-text conversion is not wired yet (HANDOFF §19.6).");
+      } else {
+        setMessage(decision.reason);
+      }
+    },
+    [insertIntoDraft, richTextPreference],
+  );
+
+  /** Applies the drop rules (§12: images only, with a size limit). */
+  const handleDrop = useCallback((event: React.DragEvent) => {
+    const files = [...(event.dataTransfer?.files ?? [])];
+    event.preventDefault();
+    if (files.length === 0) {
+      return;
+    }
+    const decision = decideDrop(files);
+    setMessage(
+      decision.kind === "reject"
+        ? decision.reason
+        : "Image drop is not wired yet: the API has no field for an attachment's envelope (HANDOFF §19.6).",
+    );
+  }, []);
 
   const commands = useMemo<Command[]>(
     () =>
@@ -468,7 +551,9 @@ export function App() {
   }
 
   return (
-    <main className={`shell ${sidebarVisible ? "" : "sidebar-hidden"}`}>
+    <main
+      className={`shell ${sidebarVisible ? "" : "sidebar-hidden"} ${draft ? "mobile-editing" : ""}`}
+    >
       {sidebarVisible && (
         <aside className="pane folders">
           <button type="button" className="primary" onClick={() => void createNote()}>
@@ -482,6 +567,32 @@ export function App() {
               Recycle bin
             </button>
           </nav>
+          <label className="field">
+            <span>Theme</span>
+            <select
+              value={theme}
+              onChange={(event) => {
+                const next = event.target.value as ThemePreference;
+                setTheme(next);
+                saveThemePreference(localStorage, next);
+              }}
+            >
+              <option value="system">Follow system</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+            </select>
+          </label>
+          <button
+            type="button"
+            onClick={() => {
+              const next = nextThemePreference(theme);
+              setTheme(next);
+              saveThemePreference(localStorage, next);
+            }}
+          >
+            Switch theme
+          </button>
+
           <label className="field">
             <span>Sort</span>
             <select value={sortKey} onChange={(event) => setSortKey(event.target.value as SortKey)}>
@@ -557,14 +668,21 @@ export function App() {
             {preview ? (
               <MarkdownPreview title={draft.title} body={draft.body} />
             ) : (
-              <LazyEditor
-                key={draft.id}
-                mode={editorMode}
-                value={draft.body}
-                onChange={(body) =>
-                  setDraft((current) => (current ? { ...current, body } : current))
-                }
-              />
+              <div
+                className="editor-host"
+                onPaste={handlePaste}
+                onDrop={handleDrop}
+                onDragOver={(event) => event.preventDefault()}
+              >
+                <LazyEditor
+                  key={draft.id}
+                  mode={editorMode}
+                  value={draft.body}
+                  onChange={(body) =>
+                    setDraft((current) => (current ? { ...current, body } : current))
+                  }
+                />
+              </div>
             )}
             <footer>
               <button type="button" className="primary" onClick={() => void saveDraft()}>
@@ -576,7 +694,13 @@ export function App() {
               <button
                 type="button"
                 disabled={preview}
-                onClick={() => setEditorMode((mode) => (mode === "wysiwyg" ? "source" : "wysiwyg"))}
+                onClick={() =>
+                  setEditorMode((mode) => {
+                    const next: EditorMode = mode === "wysiwyg" ? "source" : "wysiwyg";
+                    saveEditorMode(localStorage, next);
+                    return next;
+                  })
+                }
               >
                 {editorMode === "wysiwyg" ? "Markdown source" : "WYSIWYG"}
               </button>
@@ -597,6 +721,25 @@ export function App() {
           {message}
           <button type="button" onClick={() => setMessage(null)}>
             Dismiss
+          </button>
+        </div>
+      )}
+
+      {pastePrompt && (
+        <div className="palette" role="dialog" aria-label="Paste rich text">
+          <p>This paste came from a web page. How should it be inserted?</p>
+          <button
+            type="button"
+            onClick={() => {
+              setRichTextPreference("plain");
+              insertIntoDraft(pastePrompt.text);
+              setPastePrompt(null);
+            }}
+          >
+            Plain text
+          </button>
+          <button type="button" onClick={() => setPastePrompt(null)}>
+            Cancel
           </button>
         </div>
       )}

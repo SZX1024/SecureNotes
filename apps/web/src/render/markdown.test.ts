@@ -140,12 +140,17 @@ describe("hostile Markdown produces no active content (§31)", () => {
     }
   });
 
-  it("escapes a fenced code block instead of executing it", () => {
+  it("shows a fenced code block as text instead of executing it", () => {
     const html = renderMarkdown("```html\n<script>alert(1)</script>\n```\n");
 
-    // The markup is shown as text, which is the point of a code block.
-    expect(html).toContain("&lt;script");
-    expect(html).not.toContain("<script>");
+    // Highlighting splits the source into spans, so the assertion is on what the block
+    // *says* rather than on a particular escaping: the markup is visible as text and
+    // nothing executable exists in the document.
+    const container = document.createElement("div");
+    container.innerHTML = html;
+    expect(container.querySelector("code")?.textContent).toContain("<script>");
+    expect(container.querySelector("script")).toBeNull();
+    expect(containsActiveContent(html)).toBe(false);
   });
 
   it("cannot fetch a remote image over plain HTTP", () => {

@@ -22,3 +22,20 @@ export function defaultEditorMode(
   // mobile case the requirement names.
   return hasCoarsePointer || viewportWidth < 768 ? "wysiwyg" : "source";
 }
+
+/** Where a remembered mode is kept. Local UI state, never synced. */
+export const EDITOR_MODE_STORAGE_KEY = "securenotes.editor-mode";
+
+export interface ModeStorage {
+  getItem: (key: string) => string | null;
+  setItem: (key: string, value: string) => void;
+}
+
+export function loadEditorMode(storage: ModeStorage): EditorMode | null {
+  const stored = storage.getItem(EDITOR_MODE_STORAGE_KEY);
+  return stored === "wysiwyg" || stored === "source" ? stored : null;
+}
+
+export function saveEditorMode(storage: ModeStorage, mode: EditorMode): void {
+  storage.setItem(EDITOR_MODE_STORAGE_KEY, mode);
+}
