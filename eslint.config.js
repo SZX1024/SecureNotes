@@ -58,6 +58,16 @@ export default tseslint.config(
     },
   },
   {
+    // The browser harness runs in two contexts: it drives Playwright from Node, and the callbacks
+    // passed to `page.evaluate` execute inside the page, where `document` exists.
+    files: ["scripts/**/*.mjs"],
+    languageOptions: {
+      ecmaVersion: 2024,
+      sourceType: "module",
+      globals: { ...globals.node, ...globals.browser },
+    },
+  },
+  {
     files: ["apps/web/**/*.{ts,tsx}"],
     ...reactHooks.configs.flat.recommended,
   },

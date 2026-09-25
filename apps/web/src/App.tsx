@@ -147,7 +147,9 @@ export function App() {
       );
 
       setIndexVersion((version) => version + 1);
-      return context;
+      // Returned so a caller that must act on the result does not have to wait for a re-render:
+      // reading `notes` from a closure in the same tick sees the previous array.
+      return stored;
     },
     [searchIndex],
   );
@@ -247,19 +249,26 @@ export function App() {
     return () => clearInterval(timer);
   }, [screen, lockAndForget, keyStore]);
 
-  const openNote = useCallback(
-    (id: string) => {
-      const found = notes.find((entry) => entry.note.id === id);
-      if (!found) {
-        return;
-      }
-      setSelectedId(id);
-      setDraft({ id, title: found.document.title, body: found.document.body });
-      setOpenedRefs(attachmentRefsIn(found.document.body));
-      setRecent((current) => rememberOpened(current, id));
-    },
-    [notes],
-  );
+  /**
+   * Opens a note from a given list.
+   *
+   * The list is a parameter because a closure's `notes` can be stale: creating a note loads the new
+   * array and then opens it in the same tick, when the state variable still holds the previous
+   * render's value — so the note appeared in the list but never opened, and the editor pane kept
+   * saying "Select a note".
+   */
+  const openNoteFrom = useCallback((entries: StoredNote[], id: string) => {
+    const found = entries.find((entry) => entry.note.id === id);
+    if (!found) {
+      return;
+    }
+    setSelectedId(id);
+    setDraft({ id, title: found.document.title, body: found.document.body });
+    setOpenedRefs(attachmentRefsIn(found.document.body));
+    setRecent((current) => rememberOpened(current, id));
+  }, []);
+
+  const openNote = useCallback((id: string) => openNoteFrom(notes, id), [notes, openNoteFrom]);
 
   const saveDraft = useCallback(async () => {
     if (!db || !account || !draft) {
@@ -299,10 +308,11 @@ export function App() {
     const id = crypto.randomUUID();
     await runRequest(async () => {
       await createLocalNote(context, { id, title: "Untitled", body: "" });
-      await refresh(db, account);
-      openNote(id);
+      // The freshly loaded list is used directly rather than through state.
+      const stored = await refresh(db, account);
+      openNoteFrom(stored, id);
     });
-  }, [db, account, refresh, openNote, runRequest]);
+  }, [db, account, refresh, openNoteFrom, runRequest]);
 
   /** Appends pasted text to the draft. */
   const insertIntoDraft = useCallback((text: string) => {
@@ -933,25 +943,37 @@ function MarkdownPreview({ title, body }: { title: string; body: string }) {
   const container = useRef<HTMLDivElement>(null);
   const [html, setHtml] = useState<string | null>(null);
 
+  // Rendering is a two-step: the Markdown becomes HTML, then the DOM is committed, and only then can
+  // diagrams be drawn into it. Doing the second step from the same promise meant it ran while the
+  // component was still showing its placeholder — the container was not mounted, so every diagram
+  // was silently skipped and only the code blocks remained.
   useEffect(() => {
     let cancelled = false;
-    void loadRender().then(({ renderMarkdown, renderMermaidBlocks }) => {
-      if (cancelled) {
-        return;
+    void loadRender().then(({ renderMarkdown }) => {
+      if (!cancelled) {
+        setHtml(renderMarkdown(title.trim().length > 0 ? `# ${title}\n\n${body}` : body));
       }
-      setHtml(renderMarkdown(title.trim().length > 0 ? `# ${title}\n\n${body}` : body));
-      // Mermaid is rendered after insertion and its SVG is sanitised before it goes
-      // in (§12: Markdown -> Mermaid -> SVG -> sanitizer -> DOM).
-      queueMicrotask(() => {
-        if (!cancelled && container.current) {
-          void renderMermaidBlocks(container.current);
-        }
-      });
     });
     return () => {
       cancelled = true;
     };
   }, [title, body]);
+
+  useEffect(() => {
+    if (html === null || !container.current) {
+      return;
+    }
+    let cancelled = false;
+    void loadRender().then(({ renderMermaidBlocks }) => {
+      // §12: Markdown -> Mermaid -> SVG -> sanitizer -> DOM.
+      if (!cancelled && container.current) {
+        void renderMermaidBlocks(container.current);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [html]);
 
   if (html === null) {
     return <p className="muted">Rendering…</p>;

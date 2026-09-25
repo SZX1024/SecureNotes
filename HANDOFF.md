@@ -1017,3 +1017,48 @@ Vite 日志出现 `optimized dependencies changed. reloading`（依赖重新预�
 
 **教训**：我的测试全跑在 Node/jsdom 里，**没有一处覆盖「浏览器如何加载这些模块」**。这类缺陷只有真实浏览器会暴露，
 而我又恰恰在开发环境引入了 SW 这个中间层。
+
+## 22. 真实浏览器调试（Playwright + 系统 Chrome）—— 三个被单元测试掩盖的缺陷
+
+**背景**：单元测试全在 Node/jsdom 中运行，因此**完全覆盖不到「浏览器如何加载与渲染」**。用户要求我自己装浏览器调试，
+于是用**系统已有的 Chrome 153** + `playwright-core`（不下载浏览器）驱动真实页面：脚本
+`scripts/browser-debug.mjs`（登录时用 `scripts/dev-totp.mjs` 从本地 D1 解封 TOTP 密钥生成验证码，
+**只用于开发调试，不打印任何密钥**；测试文档 `scripts/test-document.md`）。
+
+### 22.1 新建笔记**从不在编辑器里打开**（用户「preview 渲染不出来」的真正原因）
+
+`createNote()` 在 `await refresh(...)` 之后**立即**调用 `openNote(id)`，而 `openNote` 从闭包读取 `notes` ——
+此刻 React 尚未重渲染，`notes` 仍是**上一轮的数组**，于是 `found` 为 undefined 而**直接 return**。
+现象：列表里**出现了**「Untitled」笔记，但编辑器面板一直显示「Select a note, or create one.」。
+
+**为何用户必中**：我重置数据库后他家本地笔记全被清空，**唯一可行的入口就是「New note」**。
+修复：`refresh()` 返回它加载的数组；新增 `openNoteFrom(entries, id)`，创建流程直接用**刚加载的数组**，
+不再依赖尚未更新的 state。**已在真实浏览器验证**（`cmContent: true`、标题输入与按钮出现）。
+
+### 22.2 Preview 里 **Mermaid 从不渲染**
+
+`MarkdownPreview` 用 `queueMicrotask` 在 `setHtml` 之后立刻调用 `renderMermaidBlocks`，
+但那一刻 React **还没提交新 DOM**；而且 `html === null` 时组件渲染的是「Rendering…」，`container.current` **是 null**
+→ 整个 Mermaid 渲染被**静默跳过**。真实浏览器证据：`diagrams: 0`。
+
+修复：把渲染放到**依赖 `html` 的 `useEffect`**（DOM 提交之后）。验证：`diagrams: 2`，预览 HTML 由 9640 → 18332 字符。
+
+### 22.3 Mermaid 图**丢掉全部样式**（节点变成黑块）
+
+截图证据：流程图节点是**纯黑色块、文字不可读**。原因：**Mermaid 把样式放在 SVG 内部的 `<style>` 元素里**，
+而 SVG 净化把它**整块删除**（HTML 策略确实该删，但 SVG 里那是图表唯一的配色来源）。
+
+修复：新增 `sanitizeSvgStyleSheet(css)` —— **逐条规则过滤**：选择器必须简单（无 at-rule、无 `url(`、无转义），
+声明沿用 `sanitizeCss` 的表现性属性允许列表。实现细节：`FORBID_TAGS` 优先于 `ADD_TAGS`，
+所以 SVG 那一趟必须把 `style` 从禁止列表里**移除**才能进入过滤；`hardenFragment` 在过滤结果为空时**删除该元素**。
+普通笔记 HTML 里的 `<style>` **仍然被删除**（有专门测试防止例外泄漏）。
+验证：预览 HTML 18332 → **42760** 字符，截图确认流程图**可读**。
+
+### 22.4 一个必须上报的产品取舍：YouTube 嵌入在严格沙箱下会报错
+
+真实浏览器 page error：`writeEmbed is not defined`、`Failed to read the 'caches' property … sandboxed and lacks allow-same-origin`
+—— 这些来自 **YouTube iframe 自己的脚本**。这说明**隔离确实生效**（不透明源、拿不到 storage），
+但 YouTube 播放器因此**无法完全工作**。§12 说的是「use restrictive sandboxing **where compatible**」：
+我选择**优先隔离**（宁可播放器降级，也不给嵌入方同源权限）。若产品要求 YouTube 必须可用，
+正确解法是**独立源承载嵌入**（需要额外基础设施），而不是加 `allow-same-origin`——那会让嵌入方能碰到本应用的 DOM 与密钥。
+**这一项需要你决定。**

@@ -311,6 +311,40 @@ export function sanitizeCss(style: string): string {
   return kept.join("; ");
 }
 
+/**
+ * Filters the stylesheet a diagram carries inside its own SVG.
+ *
+ * Mermaid does not style its output inline: it emits a `<style>` element inside the SVG. Removing
+ * that element — which the HTML policy does, and should — left every flowchart node filled black
+ * with unreadable labels, because all the colour and text styling lived there. So the CSS is
+ * filtered rule by rule instead: only simple selectors survive, and only the presentational
+ * properties `sanitizeCss` already allows. `url()`, at-rules, expressions and escapes are rejected
+ * there before any value is looked at, so a diagram still cannot fetch anything.
+ */
+export function sanitizeSvgStyleSheet(css: string): string {
+  const rules: string[] = [];
+
+  for (const chunk of css.split("}")) {
+    const brace = chunk.indexOf("{");
+    if (brace === -1) {
+      continue;
+    }
+    const selector = chunk.slice(0, brace).trim();
+    const declarations = chunk.slice(brace + 1);
+
+    // No at-rules, no fetching, and nothing exotic in the selector.
+    if (!/^[.#a-zA-Z0-9_\s>,:()[\]="'*-]{1,300}$/.test(selector)) {
+      continue;
+    }
+    const filtered = sanitizeCss(declarations);
+    if (filtered.length > 0) {
+      rules.push(`${selector} { ${filtered} }`);
+    }
+  }
+
+  return rules.join("\n");
+}
+
 /** Whether a URL is acceptable for a link: absolute http(s) or a same-origin path. */
 export function isSafeLinkUrl(url: string): boolean {
   const trimmed = url.trim();
@@ -514,6 +548,16 @@ function hardenFragment(container: Element): void {
       continue;
     }
 
+    if (tag === "style") {
+      const filtered = sanitizeSvgStyleSheet(element.textContent ?? "");
+      if (filtered.length === 0) {
+        element.remove();
+      } else {
+        element.textContent = filtered;
+      }
+      continue;
+    }
+
     // Task lists need checkboxes; any other input is a form control.
     if (tag === "input" && (element.getAttribute("type") ?? "").toLowerCase() !== "checkbox") {
       element.remove();
@@ -578,7 +622,15 @@ export function sanitizeHtml(html: string): string {
 export function sanitizeSvg(svg: string): string {
   installHooks();
 
-  const clean = String(DOMPurify.sanitize(svg, BASE_CONFIG));
+  // `style` is allowed here only so its contents can be filtered: the HTML policy keeps it
+  // forbidden, and `hardenFragment` removes it again when nothing survives the filter.
+  const clean = String(
+    DOMPurify.sanitize(svg, {
+      ...BASE_CONFIG,
+      FORBID_TAGS: FORBIDDEN_TAGS.filter((tag) => tag !== "style"),
+      ADD_TAGS: ["style"],
+    }),
+  );
 
   const container = document.createElement("div");
   container.innerHTML = clean;

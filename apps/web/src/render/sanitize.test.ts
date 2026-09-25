@@ -266,6 +266,38 @@ describe("SVG sanitisation (§12, §31)", () => {
     expect(clean).not.toContain("evil.example");
   });
 
+  it("filters the stylesheet a diagram carries, instead of deleting it", () => {
+    // Mermaid styles its output from a <style> inside the SVG. Removing that element left every
+    // flowchart node black with unreadable labels; keeping it unfiltered would let a diagram fetch.
+    const clean = sanitizeSvg(
+      '<svg><style>.node rect { fill: #ECECFF; stroke: #9370DB; } .edge { background: url(https://evil.example/x); } @import url(https://evil.example/y);</style><rect class="node"/></svg>',
+    );
+
+    // Case is preserved from the source, so the comparison is case-insensitive.
+    expect(clean.toLowerCase()).toContain("fill: #ececff");
+    expect(clean.toLowerCase()).toContain("stroke: #9370db");
+    // Nothing that can fetch survives, and neither does the at-rule.
+    expect(clean).not.toContain("evil.example");
+    expect(clean).not.toContain("@import");
+    expect(clean).not.toContain("url(");
+  });
+
+  it("drops an SVG stylesheet that has nothing safe left", () => {
+    const clean = sanitizeSvg(
+      "<svg><style>@import url(https://evil.example/x);</style><rect/></svg>",
+    );
+
+    expect(clean).not.toContain("<style");
+    expect(clean).toContain("<rect");
+  });
+
+  it("still drops a style element in note HTML (§12)", () => {
+    // The SVG exception must not leak into ordinary markup.
+    expect(sanitizeHtml("<style>body { background: red }</style><p>kept</p>")).not.toContain(
+      "<style",
+    );
+  });
+
   it("handles an SVG hidden inside sanitised HTML", () => {
     const clean = sanitizeHtml(
       '<p>x</p><svg><script>alert(1)</script><use href="https://evil.example"/></svg>',
