@@ -89,6 +89,17 @@ export async function pushChange(
       return "ok";
     }
 
+    if (change.objectType === "note_tag_link") {
+      // The note's tag set is uploaded as a whole: the server replaces it, so this is idempotent and a retry
+      // cannot double-apply a link (§16: set semantics where they are safe).
+      const links = await db.noteTags.where("noteId").equals(change.objectId).toArray();
+      await apiRequest(`/notes/${change.objectId}/tags`, {
+        method: "PUT",
+        body: { tagIds: links.map((link) => link.tagId) },
+      });
+      return "ok";
+    }
+
     if (change.objectType === "tag") {
       if (change.operation === "delete") {
         await apiRequest(`/tags/${change.objectId}`, { method: "DELETE" });
@@ -120,9 +131,18 @@ export async function pushChange(
       if (error.status === 409) {
         return "conflict";
       }
-      // 4xx other than those is a request the server will keep rejecting; retrying forever would block
-      // the queue, so it is treated as a conflict for a human to look at.
-      if (error.status >= 400 && error.status < 500 && error.status !== 429) {
+      /**
+       * A 412 is "not yet" rather than "no": a note can reach the server before the folder it was moved into,
+       * because they are separate queued changes. That is answered by retrying — the next pass uploads the
+       * folder first, since the engine orders folders before notes — so it must not pause the note as a
+       * conflict the user cannot act on.
+       */
+      const retryable =
+        error.status === 408 ||
+        error.status === 412 ||
+        error.status === 425 ||
+        error.status === 429;
+      if (error.status >= 400 && error.status < 500 && !retryable) {
         return "conflict";
       }
     }

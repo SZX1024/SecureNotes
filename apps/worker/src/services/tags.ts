@@ -51,9 +51,11 @@ export async function createTag(
   input: { id: string; name: CryptoEnvelope },
   nowMs: number,
 ): Promise<TagRow> {
+  // Idempotent, like every other create: the id is the client's, and a replayed upload must succeed rather
+  // than turn into a conflict. A rename afterwards is queued as its own update.
   const existing = await findTag(env, userId, input.id);
   if (existing) {
-    throw new ApiError("CONFLICT", { diagnostic: "a tag with that id already exists" });
+    return existing;
   }
 
   await env.DB.batch([

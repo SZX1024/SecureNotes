@@ -128,6 +128,21 @@ async function run() {
   const code = await new Promise((resolve) =>
     spec.on("exit", (exitCode) => resolve(exitCode ?? 1)),
   );
+
+  if (code !== 0) {
+    let printed = 0;
+    for (const child of children) {
+      for (const line of child.output.split("\n")) {
+        if (/error|Error|exception|500/i.test(line) && printed < 20) {
+          console.error(`  server log: ${line.slice(0, 400)}`);
+          printed += 1;
+        }
+      }
+    }
+    if (printed === 0) {
+      console.error("  server log: no lines mentioning an error");
+    }
+  }
   return code;
 }
 

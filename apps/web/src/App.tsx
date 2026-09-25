@@ -31,6 +31,29 @@ import { openAppDatabase } from "./local/migrations";
 import { KeyStore } from "./local/key-store";
 import type { SecureNotesDatabase } from "./local/schema";
 import { NoteSearchIndex, highlightSegments } from "./search";
+import { MAX_TAGS_PER_NOTE } from "@securenotes/shared";
+
+import {
+  createLocalFolder,
+  createLocalTag,
+  deleteLocalFolder,
+  deleteLocalTag,
+  readLocalFolderName,
+  readLocalNoteTags,
+  readLocalTagName,
+  renameLocalTag,
+  setLocalNoteTags,
+  updateLocalFolder,
+  updateLocalNoteMetadata,
+} from "./data/repository";
+import {
+  buildFolderTree,
+  notesInFolder,
+  planTagChange,
+  type FolderNode,
+  type FolderRow,
+} from "./data/organisation";
+import { FolderTree, NoteOrganisation, TagList } from "./ui/Organisation";
 import { defaultEditorMode, loadEditorMode, saveEditorMode, type EditorMode } from "./editor/mode";
 import {
   decideDrop,
@@ -40,7 +63,12 @@ import {
 } from "./editor/paste";
 import { uploadAttachment } from "./data/attachments-client";
 import { syncAttachmentLinks } from "./data/attachments-client";
-import { ATTACHMENT_URL_PREFIX, attachmentRefsIn, diffAttachmentRefs } from "./editor/attachments";
+import {
+  ATTACHMENT_URL_PREFIX,
+  attachmentReferencesIn,
+  attachmentRefsIn,
+  diffAttachmentRefs,
+} from "./editor/attachments";
 import {
   loadThemePreference,
   nextThemePreference,
@@ -119,6 +147,14 @@ export function App() {
   const [conflictCount, setConflictCount] = useState(0);
   /** Which conflict is open in the resolution panel, if any. */
   const [resolvingConflict, setResolvingConflict] = useState<string | null>(null);
+  /** The folder tree and tags, decrypted for display, and the filters built from them (§9, §10). */
+  const [folderRows, setFolderRows] = useState<FolderRow[]>([]);
+  const [folderTree, setFolderTree] = useState<FolderNode[]>([]);
+  const [tagList, setTagList] = useState<Array<{ id: string; name: string }>>([]);
+  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
+  const [selectedTagId, setSelectedTagId] = useState<string | null>(null);
+  const [noteTagIds, setNoteTagIds] = useState<string[]>([]);
+  const [tagLinks, setTagLinks] = useState<Map<string, string[]>>(new Map());
   const scheduler = useRef<SyncScheduler | null>(null);
   /** The references the note had when it was opened, for the save-time diff. */
   const [openedRefs, setOpenedRefs] = useState<string[]>([]);
@@ -146,6 +182,44 @@ export function App() {
   const [indexVersion, setIndexVersion] = useState(0);
 
   /** Loads and decrypts everything, then builds the in-memory index (§11). */
+  /** Loads the folder tree, the tags and the note-to-tag links, all decrypted for display. */
+  const loadOrganisation = useCallback(async (context: LocalContext) => {
+    const folders = await context.db.folders.toArray();
+    const rows: FolderRow[] = [];
+    for (const folder of folders) {
+      // A name that cannot be decrypted is shown as unknown rather than omitted: the folder exists, and
+      // hiding it would hide its notes with it.
+      const name = await readLocalFolderName(context, folder).catch(() => "(unreadable name)");
+      rows.push({
+        id: folder.id,
+        parentId: folder.parentId,
+        name,
+        depth: folder.depth,
+        sortOrder: folder.sortOrder,
+      });
+    }
+    setFolderRows(rows);
+    setFolderTree(buildFolderTree(rows));
+
+    const tags = await context.db.tags.toArray();
+    const decrypted: Array<{ id: string; name: string }> = [];
+    for (const tag of tags) {
+      try {
+        decrypted.push({ id: tag.id, name: await readLocalTagName(context, tag) });
+      } catch {
+        decrypted.push({ id: tag.id, name: "(unreadable name)" });
+      }
+    }
+    setTagList(decrypted);
+
+    const links = await context.db.noteTags.toArray();
+    const byNote = new Map<string, string[]>();
+    for (const link of links) {
+      byNote.set(link.noteId, [...(byNote.get(link.noteId) ?? []), link.tagId]);
+    }
+    setTagLinks(byNote);
+  }, []);
+
   const refresh = useCallback(
     async (database: SecureNotesDatabase, unlocked: UnlockedAccount) => {
       const context: LocalContext = {
@@ -154,6 +228,7 @@ export function App() {
         userId: unlocked.userId,
         keyVersion: unlocked.keyVersion,
       };
+      await loadOrganisation(context);
       const stored = await readAllLocalNotes(context);
       setNotes(stored);
 
@@ -178,7 +253,7 @@ export function App() {
       // reading `notes` from a closure in the same tick sees the previous array.
       return stored;
     },
-    [searchIndex],
+    [searchIndex, loadOrganisation],
   );
 
   /** Signs the user out locally and destroys the keys (§4). */
@@ -347,16 +422,110 @@ export function App() {
    * render's value — so the note appeared in the list but never opened, and the editor pane kept
    * saying "Select a note".
    */
-  const openNoteFrom = useCallback((entries: StoredNote[], id: string) => {
-    const found = entries.find((entry) => entry.note.id === id);
-    if (!found) {
-      return;
-    }
-    setSelectedId(id);
-    setDraft({ id, title: found.document.title, body: found.document.body });
-    setOpenedRefs(attachmentRefsIn(found.document.body));
-    setRecent((current) => rememberOpened(current, id));
-  }, []);
+  /** The CRUD behind the folder tree and the tag list (§9, §10). */
+  const organisationActions = useMemo(() => {
+    const context = (): LocalContext | null =>
+      db && account
+        ? { db, dek: account.dek, userId: account.userId, keyVersion: account.keyVersion }
+        : null;
+
+    const after = async (local: LocalContext) => {
+      await loadOrganisation(local);
+      scheduler.current?.scheduleAfterIdle();
+    };
+
+    return {
+      createFolder: async (parentId: string | null, name: string) => {
+        const local = context();
+        if (!local) {
+          return;
+        }
+        await createLocalFolder(local, { id: crypto.randomUUID(), parentId, name });
+        await after(local);
+      },
+      renameFolder: async (id: string, name: string) => {
+        const local = context();
+        if (!local) {
+          return;
+        }
+        await updateLocalFolder(local, { id, name });
+        await after(local);
+      },
+      moveFolder: async (id: string, parentId: string | null) => {
+        const local = context();
+        if (!local) {
+          return;
+        }
+        await updateLocalFolder(local, { id, parentId });
+        await after(local);
+      },
+      deleteFolder: async (id: string) => {
+        const local = context();
+        if (!local) {
+          return;
+        }
+        // Refused here rather than undone later: the server will not delete a folder that still holds
+        // anything (children or notes), so a local delete would be resurrected by the next pull and the
+        // user would watch the folder come back.
+        const holdsNotes = (await local.db.notes.where("folderId").equals(id).count()) > 0;
+        const holdsChildren = (await local.db.folders.where("parentId").equals(id).count()) > 0;
+        if (holdsNotes || holdsChildren) {
+          setMessage("Move its notes and subfolders out before deleting this folder.");
+          return;
+        }
+        await deleteLocalFolder(local, id);
+        setSelectedFolderId((current) => (current === id ? null : current));
+        await after(local);
+      },
+      createTag: async (name: string) => {
+        const local = context();
+        if (!local) {
+          return;
+        }
+        await createLocalTag(local, { id: crypto.randomUUID(), name });
+        await after(local);
+      },
+      renameTag: async (id: string, name: string) => {
+        const local = context();
+        if (!local) {
+          return;
+        }
+        await renameLocalTag(local, { id, name });
+        await after(local);
+      },
+      deleteTag: async (id: string) => {
+        const local = context();
+        if (!local) {
+          return;
+        }
+        await deleteLocalTag(local, id);
+        setSelectedTagId((current) => (current === id ? null : current));
+        await after(local);
+      },
+    };
+  }, [db, account, loadOrganisation]);
+
+  const openNoteFrom = useCallback(
+    (entries: StoredNote[], id: string) => {
+      const found = entries.find((entry) => entry.note.id === id);
+      if (!found) {
+        return;
+      }
+      setSelectedId(id);
+      setDraft({ id, title: found.document.title, body: found.document.body });
+      setOpenedRefs(attachmentRefsIn(found.document.body));
+      setRecent((current) => rememberOpened(current, id));
+      if (db && account) {
+        // Read from the link table rather than the note: a tag is a relationship, and a note never stores the
+        // set itself.
+        void readLocalNoteTags(
+          { db, dek: account.dek, userId: account.userId, keyVersion: account.keyVersion },
+          id,
+        ).then(setNoteTagIds);
+      }
+    },
+    [db, account],
+  );
 
   const openNote = useCallback((id: string) => openNoteFrom(notes, id), [notes, openNoteFrom]);
 
@@ -561,7 +730,10 @@ export function App() {
    * Derived from the note's own text rather than a separate list, so the panel cannot
    * disagree with what the note actually contains.
    */
-  const draftAttachments = useMemo(() => (draft ? attachmentRefsIn(draft.body) : []), [draft]);
+  const draftAttachments = useMemo(
+    () => (draft ? attachmentReferencesIn(draft.body) : []),
+    [draft],
+  );
 
   const commands = useMemo<Command[]>(
     () =>
@@ -638,6 +810,12 @@ export function App() {
   const visibleNotes = useMemo(() => {
     const decorated = notes
       .filter((entry) => entry.note.deletedAt === null)
+      // §10: the folder filter includes subfolders, which is what a tree implies; the tag filter is a set
+      // membership test because a tag is a relationship rather than a property of the note.
+      .filter((entry) => notesInFolder([entry.note], selectedFolderId, folderRows).length > 0)
+      .filter((entry) =>
+        selectedTagId === null ? true : (tagLinks.get(entry.note.id) ?? []).includes(selectedTagId),
+      )
       .filter((entry) => (searchHits ? searchHits.has(entry.note.id) : true))
       .map((entry) => ({
         id: entry.note.id,
@@ -649,7 +827,7 @@ export function App() {
       }));
 
     return sortNotes(decorated, sortKey);
-  }, [notes, searchHits, sortKey]);
+  }, [notes, searchHits, sortKey, selectedFolderId, selectedTagId, folderRows, tagLinks]);
 
   if (screen === "loading" || !db) {
     return <main className="boot">Loading SecureNotes…</main>;
@@ -784,6 +962,26 @@ export function App() {
               Recycle bin
             </button>
           </nav>
+
+          <FolderTree
+            nodes={folderTree}
+            rows={folderRows}
+            selectedId={selectedFolderId}
+            onSelect={setSelectedFolderId}
+            onCreate={(parentId, name) => void organisationActions.createFolder(parentId, name)}
+            onRename={(id, name) => void organisationActions.renameFolder(id, name)}
+            onMove={(id, parentId) => void organisationActions.moveFolder(id, parentId)}
+            onDelete={(id) => void organisationActions.deleteFolder(id)}
+          />
+
+          <TagList
+            tags={tagList}
+            selectedId={selectedTagId}
+            onSelect={setSelectedTagId}
+            onCreate={(name) => void organisationActions.createTag(name)}
+            onRename={(id, name) => void organisationActions.renameTag(id, name)}
+            onDelete={(id) => void organisationActions.deleteTag(id)}
+          />
           <section className="sync-status">
             <h2>Sync</h2>
             <p className="muted" data-testid="sync-state">
@@ -925,20 +1123,68 @@ export function App() {
                 />
               </div>
             )}
+            <NoteOrganisation
+              folders={folderRows}
+              tags={tagList}
+              folderId={notes.find((entry) => entry.note.id === draft.id)?.note.folderId ?? null}
+              tagIds={noteTagIds}
+              maxTags={MAX_TAGS_PER_NOTE}
+              onFolderChange={(folderId) => {
+                if (!db || !account) {
+                  return;
+                }
+                const local: LocalContext = {
+                  db,
+                  dek: account.dek,
+                  userId: account.userId,
+                  keyVersion: account.keyVersion,
+                };
+                void updateLocalNoteMetadata(local, { id: draft.id, folderId }).then(async () => {
+                  await refresh(db, account);
+                  scheduler.current?.scheduleAfterIdle();
+                });
+              }}
+              onTagsChange={(tagIds) => {
+                if (!db || !account) {
+                  return;
+                }
+                const local: LocalContext = {
+                  db,
+                  dek: account.dek,
+                  userId: account.userId,
+                  keyVersion: account.keyVersion,
+                };
+                const planned = planTagChange(noteTagIds, tagIds, MAX_TAGS_PER_NOTE);
+                setNoteTagIds(planned.next);
+                void setLocalNoteTags(local, { noteId: draft.id, tagIds: planned.next }).then(
+                  async () => {
+                    await loadOrganisation(local);
+                    scheduler.current?.scheduleAfterIdle();
+                  },
+                );
+              }}
+            />
+
             {draftAttachments.length > 0 && (
               <section className="attachments" aria-label="Attachments">
                 <h2>Attachments ({draftAttachments.length})</h2>
                 <ul>
-                  {draftAttachments.map((id) => (
-                    <li key={id}>
+                  {draftAttachments.map((attachment) => (
+                    <li key={attachment.id}>
                       <a
-                        href={`${ATTACHMENT_URL_PREFIX}${id}/content`}
+                        href={`${ATTACHMENT_URL_PREFIX}${attachment.id}/content`}
                         target="_blank"
                         rel="noreferrer"
+                        title={attachment.id}
                       >
-                        {id.slice(0, 8)}…
+                        {attachment.label.length > 0
+                          ? attachment.label
+                          : `${attachment.id.slice(0, 8)}…`}
                       </a>
-                      <button type="button" onClick={() => removeAttachmentReference(id)}>
+                      <button
+                        type="button"
+                        onClick={() => removeAttachmentReference(attachment.id)}
+                      >
                         Remove
                       </button>
                     </li>

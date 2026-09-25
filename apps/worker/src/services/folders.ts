@@ -72,6 +72,14 @@ export async function createFolder(
   input: { id: string; parentId: string | null; name: CryptoEnvelope; sortOrder?: number },
   nowMs: number,
 ): Promise<FolderRow> {
+  // Idempotent for the same reason a note's create is: the id comes from the client and the upload queue is
+  // durable, so a replay must not be answered with a conflict. A move or a rename made after the create
+  // arrives as its own update, which is the queued change that carries it.
+  const replay = await findFolder(env, userId, input.id);
+  if (replay) {
+    return replay;
+  }
+
   let depth = 1;
   if (input.parentId !== null) {
     const parent = await findFolder(env, userId, input.parentId);

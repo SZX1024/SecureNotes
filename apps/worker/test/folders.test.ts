@@ -288,3 +288,46 @@ describe("folders: recycle bin (§9, §19)", () => {
     expect(list.body.data.folders.map((folder) => folder.id)).not.toContain("folder-other");
   });
 });
+
+describe("a replayed create is idempotent", () => {
+  it("returns the folder that already exists", async () => {
+    const id = "018f0000-0000-7000-8000-0000000folder";
+    const first = await authedRequest(`/folders`, jar, {
+      method: "POST",
+      body: { id, parentId: null, name: NAME },
+    });
+    expect(first.status, JSON.stringify(first.body)).toBe(201);
+
+    // The upload queue is durable: a lost acknowledgement replays the create. Answering with a conflict
+    // would pause the folder and, worse, leave every note inside it unable to upload — the note's folder id
+    // is a foreign key on the server.
+    const replay = await authedRequest<{ ok: true; data: { folder: { id: string } } }>(
+      `/folders`,
+      jar,
+      {
+        method: "POST",
+        body: { id, parentId: null, name: NAME },
+      },
+    );
+
+    expect(replay.status, JSON.stringify(replay.body)).toBeLessThan(300);
+    expect(replay.body.data.folder.id).toBe(id);
+  });
+
+  it("returns the tag that already exists", async () => {
+    const id = "018f0000-0000-7000-8000-000000000tag".replace("tag", "aaa");
+    const first = await authedRequest(`/tags`, jar, {
+      method: "POST",
+      body: { id, name: NAME },
+    });
+    expect(first.status, JSON.stringify(first.body)).toBe(201);
+
+    const replay = await authedRequest<{ ok: true; data: { tag: { id: string } } }>(`/tags`, jar, {
+      method: "POST",
+      body: { id, name: NAME },
+    });
+
+    expect(replay.status, JSON.stringify(replay.body)).toBeLessThan(300);
+    expect(replay.body.data.tag.id).toBe(id);
+  });
+});

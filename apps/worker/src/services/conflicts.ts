@@ -98,13 +98,17 @@ export async function recordConflict(
   }
 
   const id = crypto.randomUUID();
+  // `DO NOTHING` because two callers can reach this at once — a retried upload and a scheduled sync will
+  // both find no open conflict and both insert — and the partial unique index makes the second one a
+  // constraint violation, which surfaced as a 500 on a request that should have been a plain conflict.
   await env.DB.prepare(
     `INSERT INTO conflicts
        (id, user_id, object_type, object_id, base_revision,
         local_iv, local_ciphertext, local_crypto_version, local_key_version,
         remote_revision, remote_iv, remote_ciphertext, remote_crypto_version, remote_key_version,
         created_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)`,
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+     ON CONFLICT DO NOTHING`,
   )
     .bind(
       id,
@@ -125,7 +129,9 @@ export async function recordConflict(
     )
     .run();
 
-  const created = await findConflictById(env, input.userId, id);
+  // Read back by object rather than by id: if the insert was ignored, the row that exists is the winner's,
+  // and every caller must be given the same conflict.
+  const created = await findOpenConflict(env, input.userId, input.objectType, input.objectId);
   if (!created) {
     throw new ApiError("INTERNAL", { diagnostic: "the conflict could not be recorded" });
   }
@@ -280,6 +286,35 @@ export async function resolveConflict(
             ),
             // The resolution is a mutation like any other: without a change row, the devices that were
             // not involved in the conflict would never learn that the object moved on.
+            /**
+             * The history row is not optional.
+             *
+             * note_revisions.parent_revision_id is a foreign key, and the next edit of this note points at
+             * the revision it was based on. A resolution that moved the note's revision without recording it
+             * left the next write referring to a row that did not exist, which the database answered with a
+             * foreign-key failure: a 500 on an ordinary save, and a queue entry that could then never clear.
+             */
+            // Conditional on the note actually being at the revision this resolution writes. A resolution
+            // that arrives too late changes nothing, and recording history for a revision the note never took
+            // would leave a row that later writes could point at as their parent.
+            env.DB.prepare(
+              `INSERT INTO note_revisions
+                 (id, note_id, revision, save_reason, payload_iv, payload_ciphertext, crypto_version, key_version, created_at)
+               SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9
+                WHERE EXISTS (SELECT 1 FROM notes WHERE id = ?2 AND revision = ?3)
+               ON CONFLICT DO NOTHING`,
+            ).bind(
+              // Derived, not random: the next write names its parent as `${noteId}-r${revision}`.
+              `${conflict.object_id}-r${nextRevision}`,
+              conflict.object_id,
+              nextRevision,
+              "restore",
+              payload.iv,
+              payload.ciphertext,
+              payload.crypto_version,
+              payload.key_version,
+              nowMs,
+            ),
             syncChangeStatement(env, {
               userId,
               objectType: "note",

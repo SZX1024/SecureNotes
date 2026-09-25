@@ -58,6 +58,36 @@ export function diffAttachmentRefs(
   };
 }
 
+export interface AttachmentReference {
+  id: string;
+  /** The alt text the reference carries, which is the filename the user saw when inserting it. */
+  label: string;
+}
+
+/**
+ * The references a note carries, with their labels.
+ *
+ * The label comes from the Markdown itself rather than from a fetch: the reference already carries the
+ * filename as alt text, so a list of attachments needs no request and no decryption to be useful.
+ */
+export function attachmentReferencesIn(markdown: string): AttachmentReference[] {
+  const pattern = new RegExp(
+    `!\\[([^\\]]*)\\]\\(${ATTACHMENT_URL_PREFIX}([0-9a-fA-F-]{36})/content\\)`,
+    "g",
+  );
+  const found = new Map<string, string>();
+
+  for (const match of markdown.matchAll(pattern)) {
+    const label = (match[1] ?? "").trim();
+    const id = match[2]!;
+    if (!found.has(id)) {
+      found.set(id, label);
+    }
+  }
+
+  return [...found.entries()].map(([id, label]) => ({ id, label }));
+}
+
 /** Whether a filename looks like an image the editor may attach. */
 export function isImageFilename(filename: string): boolean {
   return /\.(png|jpe?g|gif|webp|avif|svg)$/i.test(filename);

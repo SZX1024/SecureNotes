@@ -183,11 +183,6 @@ noteRoutes.post("/notes", requireSession(), requireCsrf(), async (c) => {
   const body = await parseJsonBody(c, createSchema);
   const now = Date.now();
 
-  const existing = await findNote(c.env, session.userId, body.id);
-  if (existing) {
-    throw new ApiError("CONFLICT", { diagnostic: "a note with that id already exists" });
-  }
-
   const note = await createNote(
     c.env,
     session.userId,

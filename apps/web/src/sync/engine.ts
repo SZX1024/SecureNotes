@@ -285,15 +285,38 @@ export async function syncNow(deps: SyncDependencies): Promise<SyncOutcome> {
   const queued = await deps.db.syncQueue.orderBy("queuedAt").toArray();
   const compressed = compressQueue(queued);
 
-  // One compressed run per object, each awaited in turn within its own group.
+  // One run per object, each awaited in turn within its own group.
   const groups = new Map<string, SyncQueueItem[]>();
   for (const item of compressed) {
     const key = `${item.objectType}:${item.objectId}`;
     groups.set(key, [...(groups.get(key) ?? []), item]);
   }
 
+  /**
+   * Upload order by dependency, not by queue order.
+   *
+   * A note carries a folder id and its tags are links to tag rows, and the server enforces both with foreign
+   * keys. Pushing the groups in parallel therefore lets a link arrive before the tag it points at, which the
+   * server answers with a 500 and the queue entry then retries forever. Tags and folders go first, notes
+   * next, links last — inside each category the objects stay independent and are uploaded together.
+   */
+  const dependencyOrder: Record<string, number> = {
+    tag: 0,
+    folder: 1,
+    note: 2,
+    note_tag_link: 3,
+    attachment: 4,
+    note_attachment: 5,
+  };
+  const orderedGroups = [...groups.entries()].sort(([left], [right]) => {
+    const leftType = left.split(":")[0] ?? "";
+    const rightType = right.split(":")[0] ?? "";
+    const byType = (dependencyOrder[leftType] ?? 99) - (dependencyOrder[rightType] ?? 99);
+    return byType !== 0 ? byType : left.localeCompare(right);
+  });
+
   const results = await Promise.all(
-    [...groups.entries()].map(async ([key, items]) => {
+    orderedGroups.map(async ([key, items]) => {
       for (const item of items) {
         if (!isDue(item, startedAt)) {
           continue;

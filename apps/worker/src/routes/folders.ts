@@ -62,11 +62,6 @@ folderRoutes.post("/folders", requireSession(), requireCsrf(), async (c) => {
   const session = c.get("session")!;
   const body = await parseJsonBody(c, createSchema);
 
-  const existing = await findFolder(c.env, session.userId, body.id);
-  if (existing) {
-    throw new ApiError("CONFLICT", { diagnostic: "a folder with that id already exists" });
-  }
-
   const folder = await createFolder(
     c.env,
     session.userId,

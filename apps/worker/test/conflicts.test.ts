@@ -404,3 +404,64 @@ describe("folder conflicts (§16)", () => {
     expect(change?.revision).toBe(conflict.remoteRevision + 1);
   });
 });
+
+describe("recording a conflict is race-safe (§16)", () => {
+  it("answers with the same conflict when two uploads arrive at once", async () => {
+    const id = nextId();
+    await createNote(id, "b3JpZ2luYWw=");
+    await authedRequest(`/notes/${id}`, jar, {
+      method: "PATCH",
+      body: { baseRevision: 1, payload: envelope("cmVtb3Rl") },
+    });
+
+    // Two stale uploads at the same moment: a retry and a scheduled sync both find no open conflict and both
+    // insert. The partial unique index makes the second a constraint violation, which used to surface as a
+    // 500 on a request that should be answered with a conflict.
+    const [first, second] = await Promise.all([
+      authedRequest(`/notes/${id}`, jar, {
+        method: "PATCH",
+        body: { baseRevision: 1, payload: envelope("bG9jYWw=") },
+      }),
+      authedRequest(`/notes/${id}`, jar, {
+        method: "PATCH",
+        body: { baseRevision: 1, payload: envelope("bG9jYWw=") },
+      }),
+    ]);
+
+    expect([first.status, second.status]).toEqual([409, 409]);
+    expect((await conflicts()).filter((entry) => entry.objectId === id)).toHaveLength(1);
+  });
+});
+
+describe("a resolution leaves the note writable (§16)", () => {
+  it("allows the next ordinary save after a conflict was resolved", async () => {
+    const id = nextId();
+    await createNote(id, "b3JpZ2luYWw=");
+    await authedRequest(`/notes/${id}`, jar, {
+      method: "PATCH",
+      body: { baseRevision: 1, payload: envelope("cmVtb3Rl") },
+    });
+    await authedRequest(`/notes/${id}`, jar, {
+      method: "PATCH",
+      body: { baseRevision: 1, payload: envelope("bG9jYWw=") },
+    });
+    const conflict = (await conflicts()).find((entry) => entry.objectId === id)!;
+    const resolved = await authedRequest<{
+      ok: true;
+      data: { conflict: { remoteRevision: number } };
+    }>(`/conflicts/${conflict.id}/resolve`, jar, {
+      method: "POST",
+      body: { resolution: "local", payload: envelope("bG9jYWw=") },
+    });
+    expect(resolved.status, JSON.stringify(resolved.body)).toBe(200);
+
+    // The resolution advanced the revision. If it did not also record that revision, this next save would
+    // refer to a history row that does not exist — a foreign-key failure on an ordinary edit.
+    const next = await authedRequest(`/notes/${id}`, jar, {
+      method: "PATCH",
+      body: { baseRevision: conflict.remoteRevision + 1, payload: envelope("bmV4dA==") },
+    });
+
+    expect(next.status, JSON.stringify(next.body)).toBe(200);
+  });
+});

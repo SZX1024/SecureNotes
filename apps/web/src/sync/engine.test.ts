@@ -589,3 +589,67 @@ describe("a sync pass (§16, §17)", () => {
     await close();
   });
 });
+
+describe("upload order (§16)", () => {
+  it("uploads a tag before the link that points at it", async () => {
+    const { db, close } = await freshDb();
+    // The link is queued first, which is what a user does: create the tag panel entry, then tick it. The
+    // server has a foreign key, so the tag has to exist first or the link is answered with a 500.
+    await enqueueChange(db, {
+      objectType: "note_tag_link",
+      objectId: "note-1",
+      operation: "update",
+      baseRevision: null,
+    });
+    await enqueueChange(db, {
+      objectType: "tag",
+      objectId: "tag-1",
+      operation: "create",
+      baseRevision: null,
+    });
+
+    const order: string[] = [];
+    await syncNow({
+      db,
+      push: async (change) => {
+        order.push(change.objectType);
+        return "ok";
+      },
+      pull: async (since) => ({ cursor: since, changes: [], hasMore: false }),
+      apply: async () => "applied",
+    });
+
+    expect(order).toEqual(["tag", "note_tag_link"]);
+    await close();
+  });
+
+  it("uploads a folder before the note that sits in it", async () => {
+    const { db, close } = await freshDb();
+    await enqueueChange(db, {
+      objectType: "note",
+      objectId: "note-1",
+      operation: "create",
+      baseRevision: null,
+    });
+    await enqueueChange(db, {
+      objectType: "folder",
+      objectId: "folder-1",
+      operation: "create",
+      baseRevision: null,
+    });
+
+    const order: string[] = [];
+    await syncNow({
+      db,
+      push: async (change) => {
+        order.push(change.objectType);
+        return "ok";
+      },
+      pull: async (since) => ({ cursor: since, changes: [], hasMore: false }),
+      apply: async () => "applied",
+    });
+
+    expect(order).toEqual(["folder", "note"]);
+    await close();
+  });
+});

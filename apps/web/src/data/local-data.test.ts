@@ -11,6 +11,13 @@ import { describe, expect, it } from "vitest";
 
 import {
   createLocalFolder,
+  deleteLocalFolder,
+  deleteLocalTag,
+  readLocalNoteTags,
+  renameLocalTag,
+  setLocalNoteTags,
+  updateLocalFolder,
+  updateLocalNoteMetadata,
   createLocalNote,
   createLocalTag,
   pendingChangesFor,
@@ -423,5 +430,113 @@ describe("deriving the KEK on the client (§6)", () => {
     // The KEK is only ever used to wrap and unwrap the DEK.
     expect(kek.usages).toEqual(["encrypt", "decrypt"]);
     expect(utf8("x")).toBeInstanceOf(Uint8Array);
+  });
+});
+
+describe("organisation writes (§9, §10, §16)", () => {
+  it("re-encrypts a note's payload when only its folder changes", async () => {
+    const context = await freshContext();
+    const created = await createLocalNote(context, { id: "note-meta", title: "T", body: "B" });
+
+    const moved = await updateLocalNoteMetadata(context, { id: "note-meta", folderId: "folder-1" });
+
+    // The revision advanced, so the payload had to be re-encrypted: a row whose revision moved while its
+    // payload stayed put would decrypt here and nowhere else, and silently.
+    expect(moved.revision).toBe(created.revision + 1);
+    expect(moved.folderId).toBe("folder-1");
+    expect(await readLocalNote(context, "note-meta")).not.toBeNull();
+    expect((await pendingChangesFor(context.db, "note-meta")).at(-1)?.baseRevision).toBe(
+      created.revision,
+    );
+    await context.close();
+  });
+
+  it("keeps a note's text when it is moved", async () => {
+    const context = await freshContext();
+    await createLocalNote(context, { id: "note-move", title: "Title", body: "Body text" });
+
+    await updateLocalNoteMetadata(context, { id: "note-move", folderId: "somewhere" });
+
+    const stored = await readLocalNote(context, "note-move");
+    expect(stored?.document.title).toBe("Title");
+    expect(stored?.document.body).toBe("Body text");
+    await context.close();
+  });
+
+  it("renames a folder and stores the name under its new revision", async () => {
+    const context = await freshContext();
+    const folder = await createLocalFolder(context, { id: "folder-r", name: "Before" });
+
+    const renamed = await updateLocalFolder(context, { id: "folder-r", name: "After" });
+
+    expect(renamed.revision).toBe(folder.revision + 1);
+    // Readable again, which is what proves the envelope matches the revision it is stored under.
+    expect(await readLocalFolderName(context, renamed)).toBe("After");
+    await context.close();
+  });
+
+  it("re-encrypts a folder name on a move that does not change it", async () => {
+    const context = await freshContext();
+    await createLocalFolder(context, { id: "folder-m", name: "Kept" });
+
+    const moved = await updateLocalFolder(context, { id: "folder-m", parentId: null });
+
+    expect(moved.revision).toBe(2);
+    expect(await readLocalFolderName(context, moved)).toBe("Kept");
+    await context.close();
+  });
+
+  it("deletes a folder and queues the deletion", async () => {
+    const context = await freshContext();
+    await createLocalFolder(context, { id: "folder-d", name: "Gone" });
+
+    await deleteLocalFolder(context, "folder-d");
+
+    expect(await context.db.folders.get("folder-d")).toBeUndefined();
+    expect((await pendingChangesFor(context.db, "folder-d")).at(-1)?.operation).toBe("delete");
+    await context.close();
+  });
+
+  it("replaces a note's tags as a set", async () => {
+    const context = await freshContext();
+    await createLocalTag(context, { id: "tag-a", name: "A" });
+    await createLocalTag(context, { id: "tag-b", name: "B" });
+    await createLocalNote(context, { id: "note-tags", title: "T", body: "" });
+
+    await setLocalNoteTags(context, { noteId: "note-tags", tagIds: ["tag-a", "tag-b"] });
+    // The same set again with a duplicate: sets mean this produces exactly the same two links.
+    await setLocalNoteTags(context, { noteId: "note-tags", tagIds: ["tag-b", "tag-a", "tag-a"] });
+
+    expect((await readLocalNoteTags(context, "note-tags")).sort()).toEqual(["tag-a", "tag-b"]);
+    await context.close();
+  });
+
+  it("removes a tag's links without touching the notes", async () => {
+    const context = await freshContext();
+    await createLocalTag(context, { id: "tag-x", name: "X" });
+    await createLocalNote(context, { id: "note-keep", title: "Kept", body: "" });
+    await setLocalNoteTags(context, { noteId: "note-keep", tagIds: ["tag-x"] });
+
+    await deleteLocalTag(context, "tag-x");
+
+    expect(await context.db.tags.get("tag-x")).toBeUndefined();
+    expect(await readLocalNoteTags(context, "note-keep")).toEqual([]);
+    // The note itself is untouched: only the relationship went (§9).
+    expect(await context.db.notes.get("note-keep")).toBeTruthy();
+    await context.close();
+  });
+
+  it("renames a tag and keeps its links", async () => {
+    const context = await freshContext();
+    await createLocalTag(context, { id: "tag-z", name: "Old" });
+    await createLocalNote(context, { id: "note-z", title: "T", body: "" });
+    await setLocalNoteTags(context, { noteId: "note-z", tagIds: ["tag-z"] });
+
+    const renamed = await renameLocalTag(context, { id: "tag-z", name: "New" });
+
+    expect(await readLocalTagName(context, renamed)).toBe("New");
+    // Links point at the id, which does not change.
+    expect(await readLocalNoteTags(context, "note-z")).toEqual(["tag-z"]);
+    await context.close();
   });
 });

@@ -13,6 +13,29 @@ const ROOT = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
 const BASE_URL = process.env.E2E_BASE_URL ?? "http://localhost:5174";
 const SHOTS = `${ROOT}/.sandbox-home/shots`;
 
+/**
+ * Waits until a page reports it has nothing left to do.
+ *
+ * The app schedules a sync five seconds after every edit, so a step that depends on the server's revision
+ * has to wait for quiet. Sleeping a fixed time instead made this suite flap: the two devices' automatic
+ * passes interleaved differently on each run.
+ */
+async function waitForQuiet(page, timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const label =
+      (await page
+        .getByTestId("sync-state")
+        .textContent()
+        .catch(() => "")) ?? "";
+    if (/Synced|Conflict|Sync error|Sign in/.test(label)) {
+      return label.trim();
+    }
+    await page.waitForTimeout(500);
+  }
+  return "timed out";
+}
+
 /** RFC 6238, so the run can sign in without reaching into anyone's database. */
 function totpFromBase32(secret) {
   if (!secret) {
@@ -87,9 +110,18 @@ page.on("pageerror", (error) => pageErrors.push(String(error)));
 
 /** Records what the client actually sent, so a mismatch can be read rather than guessed at. */
 const noteCalls = [];
+/** Every API response that failed, so a 500 names the request that caused it. */
+const apiFailures = [];
 page.on("response", async (response) => {
   const url = response.url();
-  if (!/\/api\/v1\/notes|\/api\/v1\/sync/.test(url)) {
+  if (/\/api\/v1\//.test(url) && response.status() >= 400) {
+    // The status alone does not say why the server refused, and 409 and 500 each have several causes.
+    const body = await response.text().catch(() => "");
+    apiFailures.push(
+      `${response.request().method()} ${url.replace(/^https?:\/\/[^/]+/, "")} -> ${response.status()} ${body.slice(0, 200)}`,
+    );
+  }
+  if (!/\/api\/v1\//.test(url)) {
     return;
   }
   const request = response.request();
@@ -310,7 +342,7 @@ try {
   await page.getByRole("button", { name: "Sync now", exact: true }).click();
   await page.waitForTimeout(4000);
 
-  diagnostics.push(`SYNC CALLS: ${JSON.stringify(noteCalls.slice(-8))}`);
+  diagnostics.push(`API CALLS: ${JSON.stringify(noteCalls.slice(-24))}`);
   const syncLabel = (await page.getByTestId("sync-state").textContent()) ?? "";
   check(
     "the interface reports a state from §17",
@@ -376,7 +408,11 @@ try {
       await secondPage.getByRole("button", { name: /save/i }).click();
       await secondPage.waitForTimeout(1200);
       await secondPage.getByRole("button", { name: "Sync now", exact: true }).click();
-      await secondPage.waitForTimeout(5000);
+      // Quiet before reading the revision: the second device's idle sync must not land mid-check.
+      check(
+        "the second device settles after its edit",
+        (await waitForQuiet(secondPage)) !== "timed out",
+      );
 
       const revisionAfterSecondDevice = await secondPage.evaluate(async () => {
         const payload = await (await fetch("/api/v1/notes", { credentials: "same-origin" })).json();
@@ -401,7 +437,16 @@ try {
       await page.getByRole("button", { name: /save/i }).click();
       await page.waitForTimeout(1200);
       await page.getByRole("button", { name: "Sync now", exact: true }).click();
-      await page.waitForTimeout(6000);
+      // The stale edit is retried until it conflicts, so wait for the conflict rather than for a duration.
+      await page
+        .waitForFunction(
+          () =>
+            /Conflict/i.test(
+              document.querySelector('[data-testid="sync-state"]')?.textContent ?? "",
+            ),
+          { timeout: 30_000 },
+        )
+        .catch(() => undefined);
 
       const conflictedLabel = (await page.getByTestId("sync-state").textContent()) ?? "";
       check(
@@ -438,7 +483,8 @@ try {
       );
 
       await page.getByRole("button", { name: "Keep local", exact: true }).click();
-      await page.waitForTimeout(6000);
+      // Quiet again: the resolution triggers a pass, and the next checks read the server's revision.
+      check("the first device settles after resolving", (await waitForQuiet(page)) !== "timed out");
       console.log(
         "AFTER RESOLVE:",
         JSON.stringify(
@@ -483,6 +529,92 @@ try {
   }));
   check("formulas render in place in the editor", inPlace.katex > 0, `${inPlace.katex}`);
   check("diagrams render in place in the editor", inPlace.diagrams > 0, `${inPlace.diagrams}`);
+
+  // 10. Organisation (§9, §10): folders, tags, the filters built from them, and the server receiving them.
+  await waitForQuiet(page);
+  await page.getByLabel("New folder name").fill("Work");
+  await page.getByRole("button", { name: "Add folder" }).click();
+  await page.waitForTimeout(1500);
+
+  const treeHasFolder = await page.evaluate(() =>
+    [...document.querySelectorAll(".folder-tree button")].some(
+      (button) => button.textContent?.trim() === "Work",
+    ),
+  );
+  check("a folder appears in the tree (§9)", treeHasFolder);
+
+  // Put the open note into it.
+  await page.getByLabel("Note folder").selectOption({ label: "Work" });
+  await page.waitForTimeout(2000);
+
+  // The tree filter shows the notes in that folder, including its subfolders.
+  await page.evaluate(() => {
+    const button = [...document.querySelectorAll(".folder-tree button")].find(
+      (candidate) => candidate.textContent?.trim() === "Work",
+    );
+    button?.click();
+  });
+  await page.waitForTimeout(1500);
+  const inFolder = await page.evaluate(() => document.querySelectorAll(".note-list button").length);
+  check("the folder filter shows the note (§10)", inFolder >= 1, `${inFolder} note(s)`);
+
+  // A tag, and the note carrying it.
+  await page.getByLabel("New tag name").fill("urgent");
+  await page.getByRole("button", { name: "Add tag" }).click();
+  await page.waitForTimeout(1500);
+  await page.getByRole("checkbox", { name: "urgent" }).check();
+  await page.waitForTimeout(2000);
+
+  await page.evaluate(() => {
+    const button = [...document.querySelectorAll(".tags-pane button")].find(
+      (candidate) => candidate.textContent?.trim() === "urgent",
+    );
+    button?.click();
+  });
+  await page.waitForTimeout(1500);
+  const tagged = await page.evaluate(() => document.querySelectorAll(".note-list button").length);
+  check("the tag filter shows the note (§10)", tagged >= 1, `${tagged} note(s)`);
+
+  // A folder that still holds a note is not deleted: the server would refuse, so the interface refuses first
+  // rather than letting the folder reappear on the next pull.
+  await page.getByRole("button", { name: "Delete folder Work" }).click();
+  await page.waitForTimeout(1000);
+  const refusal = await page.evaluate(() => document.body.innerText);
+  check(
+    "deleting a folder that holds a note is refused",
+    /Move its notes and subfolders out/i.test(refusal),
+  );
+
+  // And the organisation reaches the server.
+  await page.getByRole("button", { name: "Sync now", exact: true }).click();
+  check(
+    "the device settles after the organisation changes",
+    (await waitForQuiet(page)) !== "timed out",
+  );
+
+  const onServer = await page.evaluate(async () => {
+    const read = async (path) =>
+      (await (await fetch(path, { credentials: "same-origin" })).json()).data;
+    const [folders, tags, notes] = await Promise.all([
+      read("/api/v1/folders"),
+      read("/api/v1/tags"),
+      read("/api/v1/notes"),
+    ]);
+    const noteId = (notes.notes ?? [])[0]?.id;
+    const links = noteId ? await read(`/api/v1/notes/${noteId}/tags`) : { tagIds: [] };
+    return {
+      folders: (folders.folders ?? []).length,
+      tags: (tags.tags ?? []).length,
+      links: (links.tagIds ?? []).length,
+    };
+  });
+  check("the folder reached the server (§16)", onServer.folders >= 1, JSON.stringify(onServer));
+  check("the tag reached the server (§16)", onServer.tags >= 1, JSON.stringify(onServer));
+  check(
+    "the note's tag link reached the server (§16)",
+    onServer.links >= 1,
+    JSON.stringify(onServer),
+  );
 
   // 10. Replace the authenticator from the recovery session (§3), then sign in with the new one. The
   //    full circle is what proves the recovery path is a way back in rather than a dead end.
@@ -547,6 +679,7 @@ if (failures.length > 0) {
   for (const entry of diagnostics) {
     console.log(`  diagnostic ${entry}`);
   }
+  console.log(`  failing api calls: ${JSON.stringify(apiFailures.slice(0, 12))}`);
   console.log(`e2e browser checks: ${notes.length} passed, ${failures.length} failed`);
   process.exit(1);
 }
