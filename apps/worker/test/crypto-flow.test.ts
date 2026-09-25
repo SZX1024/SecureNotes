@@ -20,6 +20,7 @@ import {
   clearTotpReplayGuard,
   createAccount,
   errorCode,
+  cookieJarFrom,
   login,
   loginOnce,
   resetRateLimits,
@@ -582,5 +583,130 @@ describe("TOTP rebind without recovery wrappings (§3)", () => {
     // Every recovery wrapping is untouched: those codes are still a way back in.
     expect(codesAfter.results).toEqual(codesBefore.results);
     expect(codesAfter.results.some((row) => row.iv !== null)).toBe(true);
+  });
+});
+
+describe("the recovery package (§20)", () => {
+  /**
+   * Signs in with a recovery code.
+   *
+   * The rebind cases above revoke every session and replace the authenticator, so the fixture's secret no longer
+   * opens this account — while the recovery codes still do, by design. That is also the situation the package
+   * exists for: it is what a user needs when the authenticator is gone.
+   */
+  async function signedInJar(codeIndex: number): Promise<CookieJar> {
+    clearTotpReplayGuard();
+    // The recovery endpoint, not the login one: the authenticator this fixture knows about was replaced by the
+    // rebind cases above, and the codes are what still open the account.
+    const response = await apiRequest<{ ok: boolean; data: { csrfToken?: string } }>(
+      "/auth/recovery",
+      {
+        method: "POST",
+        body: { username: account.username, code: account.recoveryCodes[codeIndex]!.code },
+        headers: { "cf-connecting-ip": "198.51.100.90" },
+      },
+    );
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    const jar = cookieJarFrom(response.setCookies, response.body.data.csrfToken);
+    expect(jar.session.length).toBeGreaterThan(0);
+    return jar;
+  }
+
+  it("needs a session", async () => {
+    const response = await apiRequest("/export/recovery-package");
+
+    // It hands over the account's key material, so it is never readable without one.
+    expect(response.status).toBe(401);
+  });
+
+  it("carries the key material and nothing that opens it by itself", async () => {
+    jar = await signedInJar(5);
+
+    const response = await authedRequest<{
+      ok: true;
+      data: {
+        recoveryPackage: {
+          format: string;
+          formatVersion: number;
+          account: { username: string };
+          kdf: { accountSalt: string; accountContext: string; recoveryContext: string };
+          accountWrapping: CryptoEnvelope;
+          recoveryWrappings: Array<{ salt: string; envelope: CryptoEnvelope }>;
+          excludes: string[];
+        };
+      };
+    }>("/export/recovery-package", jar);
+
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    const recoveryPackage = response.body.data.recoveryPackage;
+
+    expect(recoveryPackage.format).toBe("securenotes-recovery");
+    expect(recoveryPackage.formatVersion).toBe(1);
+    expect(recoveryPackage.account.username).toBe(account.username);
+    expect(recoveryPackage.kdf.accountSalt).toBe(kdfSalt);
+
+    // The same wrapping the login path gives back: the package is a copy of the key material, not a second one.
+    const current = await currentWrappedDek();
+    expect(recoveryPackage.accountWrapping.ciphertext).toBe(current.wrappedDek.ciphertext);
+
+    // One wrapping per unused code, each with its own salt: the count moves as codes are spent, and this file
+    // spends several.
+    const unused = await testEnv.DB.prepare(
+      "SELECT COUNT(*) AS count FROM recovery_codes WHERE used_at IS NULL",
+    ).first<{ count: number }>();
+    expect(recoveryPackage.recoveryWrappings).toHaveLength(unused?.count ?? -1);
+    expect(new Set(recoveryPackage.recoveryWrappings.map((entry) => entry.salt)).size).toBe(
+      recoveryPackage.recoveryWrappings.length,
+    );
+    // And each one opens the same data key: they are wrappings of one secret, not of different ones.
+    expect(
+      new Set(recoveryPackage.recoveryWrappings.map((entry) => entry.envelope.ciphertext)).size,
+    ).toBeGreaterThan(0);
+
+    // §20: the authenticator secret is never in it. Checked against the actual value rather than against a field
+    // list, because a field list is exactly what a leak would not appear in.
+    const serialized = JSON.stringify(recoveryPackage);
+    expect(serialized).not.toContain(account.totpSecret);
+    expect(serialized).not.toContain(bytesToBase64(base32Decode(account.totpSecret)));
+    expect(recoveryPackage.excludes).toContain("totp_secret");
+  });
+
+  it("carries exactly the wrappings whose codes are still usable", async () => {
+    jar = await signedInJar(6);
+
+    const read = async () =>
+      (
+        await authedRequest<{
+          ok: true;
+          data: { recoveryPackage: { recoveryWrappings: Array<{ salt: string }> } };
+        }>("/export/recovery-package", jar)
+      ).body.data.recoveryPackage.recoveryWrappings.map((entry) => entry.salt);
+
+    const saltsBefore = await read();
+    const unusedSalts = async () => {
+      const rows = await testEnv.DB.prepare(
+        "SELECT kdf_salt FROM recovery_codes WHERE used_at IS NULL",
+      ).all<{ kdf_salt: string }>();
+      return rows.results.map((row) => row.kdf_salt).sort();
+    };
+    // The package lists every code that can still recover the account, and no other.
+    expect(saltsBefore.slice().sort()).toEqual(await unusedSalts());
+
+    // Spend one of the codes the package carries.
+    const spent = account.recoveryCodes.find((entry) => saltsBefore.includes(entry.salt))!;
+    const redemption = await apiRequest("/auth/recovery", {
+      method: "POST",
+      body: { username: account.username, code: spent.code },
+      headers: { "cf-connecting-ip": "198.51.100.78" },
+    });
+    expect(redemption.status, JSON.stringify(redemption.body)).toBe(200);
+
+    // Spending a code revokes the sessions, so the package is read again through a fresh one.
+    jar = await signedInJar(9);
+    const saltsAfter = await read();
+
+    // A spent code's wrapping opens nothing, so it is gone; every other one is still there.
+    expect(saltsAfter).not.toContain(spent.salt);
+    expect(saltsAfter.slice().sort()).toEqual(await unusedSalts());
   });
 });

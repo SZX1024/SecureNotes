@@ -1490,18 +1490,18 @@ ok  the reminder clears after an export (§20)
 **导入**：ZIP 解析（已有）→ 事务性提交（Dexie 单事务；失败回滚）、重复 id 的**合并/重映射**选择、导入后入队同步；
 随后是**恢复包**（独立、版本化、不含明文 TOTP）。
 
-
 ## 34. P8（第 2 批）：导入（事务性 + 用户决定重复项）
 
 ### 34.1 交付
 
-| 文件 | 内容 |
-| --- | --- |
-| `src/export/import.ts` | **计划**（纯函数：合并 / 重映射）+ **提交**（单事务） |
-| `src/local/aad.ts` | 把 AAD 约定抽成**一处声明**（原先是 repository 的私有函数；现在三个模块要用同一套，安全相关的细节不该复制三份） |
-| `App.tsx` | Import… 文件输入 → 解析校验 → **冲突询问**（Merge / Import as copies / Cancel）→ 报告 |
+| 文件                   | 内容                                                                                                            |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `src/export/import.ts` | **计划**（纯函数：合并 / 重映射）+ **提交**（单事务）                                                           |
+| `src/local/aad.ts`     | 把 AAD 约定抽成**一处声明**（原先是 repository 的私有函数；现在三个模块要用同一套，安全相关的细节不该复制三份） |
+| `App.tsx`              | Import… 文件输入 → 解析校验 → **冲突询问**（Merge / Import as copies / Cancel）→ 报告                           |
 
 **规则（都写进了代码注释）**：
+
 - **合并**：笔记取 `updatedAt` 较新的一侧；标签取**并集**；本地更新则**完全不动**（`unchanged`）；文件夹/标签合并时**保留本地**（那是用户当前的名字）。
 - **重映射**：每一个冲突对象拿到**新 id**，并把**引用一起改写**（笔记的文件夹、标签、附件的来源笔记）。
 - 合并替换文本时按**新修订重新加密**并入队 `update`（`baseRevision` = 旧修订）——修订在 AAD 里，这一步错了就是静默解不开。
@@ -1532,3 +1532,54 @@ ok  merging an archive that is already here changes nothing (§20) 4 -> 4
 ### 34.4 下一批
 
 **恢复包**（§20）：独立于普通导出、**版本化**、**不含明文 TOTP 密钥**，只含恢复所需的最小受保护密钥/恢复元数据。
+
+
+## 35. P8（第 3 批）：恢复包 —— P8 完成
+
+### 35.1 需求（§20）
+
+「独立的账户恢复包；**不得包含明文 TOTP 密钥**；只含恢复设计所需的最小受保护密钥/恢复元数据；**格式必须版本化**。」
+
+### 35.2 交付
+
+| 位置 | 内容 |
+| --- | --- |
+| `apps/worker/src/services/recovery-package.ts` | 组装**最小**材料：账户包裹、**每枚未使用恢复码**的包裹（各带自己的 salt）、KDF 参数与上下文常量、版本号；`excludes` 显式列出**不含**什么 |
+| `apps/worker/src/routes/export.ts` | `GET /export/recovery-package`（需会话） |
+| `apps/web/src/export/recovery.ts` | 写成**版本化 ZIP**：`README.txt` + `manifest.json` + `key-material.json` |
+
+**README 明确区分**「恢复账户」与「备份笔记」——把两者搞混的代价很高；并说明每个包裹各自需要什么才能解开
+（账户包裹要用户名 + 认证器密钥；其余每个要各自那枚恢复码），**文件本身打不开任何东西**。
+
+### 35.3 验证（E2E 77 项）
+
+```text
+ok  a recovery package can be written (§20)
+ok  the package is versioned and separate (§20)      format=securenotes-recovery, fileVersion=1
+ok  it carries the protected key material (§20)      账户包裹 + 9 个恢复包裹
+ok  it never contains the authenticator secret (§20) containsSecretText=false, containsSecretBytes=false
+ok  it says what it does not contain (§20)           excludes: totp_secret, note_content, attachment_content
+```
+
+「不含 TOTP 密钥」这一条是用**本次注册用的真实密钥值**去校验文件字节（base32 文本与原始字节两种形态都查），
+而不是检查字段名 —— 字段清单恰恰是泄漏**不会**出现的地方。worker 侧另有三项测试（需会话、只含未使用恢复码、
+消费一枚码后该包裹消失）。
+
+### 35.4 顺带修掉的一个真实缺陷
+
+**我给失败重试加的 `window.setTimeout` 会在组件销毁后仍触发**：在测试环境里 DOM 已被拆除，回调里访问 `window`
+抛 `ReferenceError`，把 `pnpm check` 弄红。现在定时器由 ref 跟踪，并随调度器一起 `clearTimeout`。
+
+### 35.5 P8 状态
+
+| 子项 | 状态 |
+| --- | --- |
+| 导出（明文 ZIP、30 天提醒、导出后无残留） | ✅ |
+| 导入（事务性 + 回滚测试、重复 id 由用户选择、智能合并） | ✅ |
+| 恢复包（独立、版本化、不含明文 TOTP） | ✅ |
+
+`pnpm check` ✅ **607 测试**（31 + 349 + 227）· `pnpm e2e` ✅ **77 项**。
+
+### 35.6 剩余阶段
+
+**P9：安全加固与验收**（需求 §31 全部用例 + §32 逐项），交付物是**验收对照报告**。

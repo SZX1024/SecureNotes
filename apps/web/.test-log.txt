@@ -1,0 +1,67 @@
+
+> @securenotes/web@0.1.0 test /home/SZX10246/Projects/software/SecureNotes/apps/web
+> vitest run
+
+
+ RUN  v4.1.11 /home/SZX10246/Projects/software/SecureNotes/apps/web
+
+ ✓ src/render/sanitize.test.ts (34 tests) 353ms
+ ✓ src/editor/rich-text.test.ts (10 tests) 220ms
+stderr | src/render/markdown.test.ts > required Markdown features (§12) > does not allow arbitrary HTML inside a formula (§12)
+LaTeX-incompatible input and strict mode is set to 'warn': HTML extension is disabled on strict mode [htmlExtension]
+
+ ✓ src/local/migrations.test.ts (7 tests) 261ms
+ ✓ src/sync/engine.test.ts (28 tests) 251ms
+ ✓ src/sync/conflicts-client.test.ts (6 tests) 180ms
+ ✓ src/export/archive.test.ts (12 tests) 283ms
+ ✓ src/local/local-layer.test.ts (19 tests) 253ms
+ ✓ src/export/import.test.ts (8 tests) 151ms
+ ✓ src/data/local-data.test.ts (31 tests) 515ms
+ ✓ src/editor/inline-render.test.tsx (2 tests) 385ms
+     ✓ mounts and contains the note's text  306ms
+ ✓ src/render/mermaid-csp.test.ts (2 tests) 1399ms
+     ✓ hands Mermaid output to the application sanitizer as well  1183ms
+ ✓ src/editor/editor.test.tsx (8 tests) 1760ms
+     ✓ mounts with the note's Markdown  617ms
+     ✓ exports a mountable component  992ms
+ ✓ src/App.test.tsx (3 tests) 932ms
+     ✓ offers first-run enrolment when no account exists  749ms
+ ✓ src/render/markdown.test.ts (20 tests) 2366ms
+     ✓ renders a diagram and inserts only sanitised SVG  1525ms
+ ✓ src/export/zip.test.ts (10 tests) 157ms
+ ✓ src/api/client.test.ts (7 tests) 75ms
+stderr | src/editor/wysiwyg-documents.test.tsx > notes that must open in the visual editor > opens the full feature document without logging an error
+LaTeX-incompatible input and strict mode is set to 'warn': HTML extension is disabled on strict mode [htmlExtension]
+LaTeX-incompatible input and strict mode is set to 'warn': HTML extension is disabled on strict mode [htmlExtension]
+
+ ✓ src/data/attachments-client.test.ts (14 tests) 314ms
+ ✓ src/editor/paste.test.ts (15 tests) 61ms
+ ✓ src/pwa/service-worker.test.ts (6 tests) 142ms
+ ✓ src/export/recovery.test.ts (3 tests) 67ms
+stdout | src/data/attachment-content.test.ts > resolving content > leaves an unreadable attachment unread rather than throwing
+[att] failed 018f0000 the attachment could not be decrypted
+
+ ✓ src/data/attachment-content.test.ts (13 tests) 49ms
+ ✓ src/sync/scheduler.test.ts (6 tests) 29ms
+ ✓ src/data/organisation.test.ts (13 tests) 28ms
+ ✓ src/ui/ui-logic.test.ts (20 tests) 42ms
+ ✓ src/sync/merge.test.ts (12 tests) 17ms
+ ✓ src/editor/attachments.test.ts (11 tests) 9ms
+ ✓ src/export/collect.test.ts (7 tests) 9ms
+ ✓ src/pwa/update-gate.test.ts (6 tests) 7ms
+stderr | src/editor/wysiwyg-documents.test.tsx > notes that must open in the visual editor > opens the full feature document without logging an error
+LaTeX-incompatible input and strict mode is set to 'warn': HTML extension is disabled on strict mode [htmlExtension]
+
+ ✓ src/editor/wysiwyg-documents.test.tsx (4 tests) 3486ms
+     ✓ opens a note with an image and no title  558ms
+     ✓ opens a note with an image with a title, and a link without one  447ms
+     ✓ opens a note with no alt text  469ms
+     ✓ opens the full feature document without logging an error  2003ms
+ ✓ src/editor/mode.test.ts (6 tests) 4ms
+ ✓ src/theme.test.ts (6 tests) 4ms
+
+ Test Files  31 passed (31)
+      Tests  349 passed (349)
+   Start at  21:00:25
+   Duration  7.46s (transform 5.51s, setup 9.25s, import 10.99s, tests 13.81s, environment 51.06s)
+

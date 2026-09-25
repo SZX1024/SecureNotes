@@ -78,6 +78,11 @@ import {
 } from "./export/archive";
 import { applyImport, planImport, type ImportChoice } from "./export/import";
 import {
+  buildRecoveryPackageFile,
+  recoveryFileName,
+  type RecoveryPackagePayload,
+} from "./export/recovery";
+import {
   LAST_EXPORT_KEY,
   collectExportSources,
   daysSinceExport,
@@ -188,6 +193,8 @@ export function App() {
   } | null>(null);
   const [importing, setImporting] = useState(false);
   const scheduler = useRef<SyncScheduler | null>(null);
+  /** The pending retry, so it can be cancelled with the scheduler it belongs to. */
+  const retryTimer = useRef<number | null>(null);
   /** The references the note had when it was opened, for the save-time diff. */
   const [openedRefs, setOpenedRefs] = useState<string[]>([]);
   const [editorMode, setEditorMode] = useState<EditorMode>(() =>
@@ -396,10 +403,20 @@ export function App() {
     }
 
     if (outcome.nextRetryAt !== null) {
-      // The engine scheduled the next attempt; without a timer that schedule means nothing and the entry
-      // waits for the next unrelated trigger. Only the earliest one is armed, and a later pass replaces it.
+      // The engine scheduled the next attempt; without a timer that schedule means nothing and the entry waits
+      // for the next unrelated trigger. Only the earliest one is armed, and each pass replaces the last.
+      //
+      // Held in a ref rather than left loose: a timer that outlives the scheduler runs after the app has locked
+      // or the page has gone, and in a test environment it fires after the DOM itself has been torn down, where
+      // touching `window` is an uncaught error.
+      if (retryTimer.current !== null) {
+        window.clearTimeout(retryTimer.current);
+      }
       const waitMs = Math.max(500, outcome.nextRetryAt - Date.now());
-      window.setTimeout(() => void scheduler.current?.syncNow(), waitMs);
+      retryTimer.current = window.setTimeout(() => {
+        retryTimer.current = null;
+        void scheduler.current?.syncNow();
+      }, waitMs);
     }
 
     if (outcome.pulled > 0) {
@@ -488,6 +505,11 @@ export function App() {
       window.removeEventListener("online", onOnline);
       detach();
       instance.stop();
+      if (retryTimer.current !== null) {
+        // Cancelled with the scheduler: a retry belongs to the scheduler that armed it.
+        window.clearTimeout(retryTimer.current);
+        retryTimer.current = null;
+      }
       scheduler.current = null;
     };
   }, [screen, db, account, runSyncPass]);
@@ -574,6 +596,41 @@ export function App() {
       setExporting(false);
     }
   }, [db, account]);
+
+  /**
+   * Writes the account recovery package (§20).
+   *
+   * A separate thing from the export, and the interface says so: one restores the notes, the other restores the
+   * account. The server assembles it because the client never holds the other recovery codes' wrappings, and the
+   * payload contains no authenticator secret — the server has one and must not put it here.
+   */
+  const downloadRecoveryPackage = useCallback(async () => {
+    setExporting(true);
+    try {
+      const { recoveryPackage } = await apiRequest<{ recoveryPackage: RecoveryPackagePayload }>(
+        "/export/recovery-package",
+      );
+      const now = Date.now();
+      const bytes = await buildRecoveryPackageFile(recoveryPackage, now);
+      const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: "application/zip" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = recoveryFileName(now);
+      document.body.append(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setMessage(
+        `Recovery package saved with ${recoveryPackage.recoveryWrappings.length} recovery wrapping(s). Keep it away from your recovery codes; it contains no authenticator secret.`,
+      );
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : "The recovery package could not be written.",
+      );
+    } finally {
+      setExporting(false);
+    }
+  }, []);
 
   /**
    * Reads an archive and, if ids collide, asks what to do with them (§20).
@@ -1262,6 +1319,13 @@ export function App() {
               disabled={exporting || notes.length === 0}
             >
               {exporting ? "Exporting…" : "Export everything"}
+            </button>
+            <button
+              type="button"
+              onClick={() => void downloadRecoveryPackage()}
+              disabled={exporting}
+            >
+              Recovery package
             </button>
             <label className="file-input">
               <span>Import…</span>

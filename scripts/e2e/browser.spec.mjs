@@ -1017,6 +1017,78 @@ print(json.dumps({"names": names, "format": manifest["format"], "version": manif
     const importMessage = await page.evaluate(() => document.body.innerText);
     check("the import reports what it did", /Imported \d+ new item/.test(importMessage), "");
 
+    // 9c2. The recovery package (§20). Separate from the export, versioned, and — the requirement with teeth —
+    // it must not contain the authenticator secret. That is checked against the real secret this run enrolled with,
+    // because a list of field names is exactly what a leak would not appear in.
+    let recoveryDownload = "";
+    const recoveryDirectory = mkdtempSync(join(tmpdir(), "securenotes-recovery-"));
+    const onRecoveryDownload = async (download) => {
+      recoveryDownload = join(recoveryDirectory, download.suggestedFilename());
+      await download.saveAs(recoveryDownload);
+    };
+    page.on("download", onRecoveryDownload);
+
+    await page.getByRole("button", { name: "Recovery package", exact: true }).click();
+    const recoveryDeadline = Date.now() + 30_000;
+    while (Date.now() < recoveryDeadline && recoveryDownload.length === 0) {
+      await page.waitForTimeout(500);
+    }
+    page.off("download", onRecoveryDownload);
+    diagnostics.push(`RECOVERY: ${recoveryDownload}`);
+    check("a recovery package can be written (§20)", recoveryDownload.length > 0, recoveryDownload);
+
+    if (recoveryDownload.length > 0) {
+      const report = JSON.parse(
+        execFileSync("python3", [
+          "-c",
+          `import base64,json,zipfile,sys
+z = zipfile.ZipFile(sys.argv[1])
+names = z.namelist()
+raw = open(sys.argv[1], "rb").read()
+manifest = json.loads(z.read("manifest.json"))
+material = json.loads(z.read("key-material.json"))
+secret = sys.argv[2]
+print(json.dumps({
+  "names": names,
+  "format": manifest["format"],
+  "fileVersion": manifest["fileVersion"],
+  "excludes": manifest["excludes"],
+  "wrappings": len(material["recoveryWrappings"]),
+  "hasAccountWrapping": bool(material["accountWrapping"].get("ciphertext")),
+  "containsSecretText": secret.encode() in raw if secret else None,
+  "containsSecretBytes": base64.b64decode(secret + "=" * (-len(secret) % 8)) in raw if secret else None,
+  "readme": z.read("README.txt").decode()[:40],
+}))`,
+          recoveryDownload,
+          base32Secret,
+        ]).toString(),
+      );
+      diagnostics.push(
+        `RECOVERY REPORT: ${JSON.stringify({ ...report, readme: report.readme.slice(0, 20) })}`,
+      );
+
+      check(
+        "the package is versioned and separate (§20)",
+        report.format === "securenotes-recovery" && report.fileVersion === 1,
+        JSON.stringify(report),
+      );
+      check(
+        "it carries the protected key material (§20)",
+        report.hasAccountWrapping && report.wrappings >= 1,
+        JSON.stringify(report),
+      );
+      check(
+        "it never contains the authenticator secret (§20)",
+        report.containsSecretText === false && report.containsSecretBytes === false,
+        JSON.stringify({ text: report.containsSecretText, bytes: report.containsSecretBytes }),
+      );
+      check(
+        "it says what it does not contain (§20)",
+        Array.isArray(report.excludes) && report.excludes.includes("totp_secret"),
+        JSON.stringify(report.excludes),
+      );
+    }
+
     // §20: the reminder is measured from the export that just happened.
     await page.waitForTimeout(2000);
     const reminderAfter = await page.evaluate(

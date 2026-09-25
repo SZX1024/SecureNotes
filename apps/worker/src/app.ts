@@ -12,6 +12,7 @@ import { attachSession } from "./middleware/session";
 import { auditRoutes } from "./routes/audit";
 import { folderRoutes } from "./routes/folders";
 import { noteRoutes, recycleBinRoutes } from "./routes/notes";
+import { exportRoutes } from "./routes/export";
 import { securityRoutes } from "./routes/security";
 import { attachmentRoutes, tagRoutes } from "./routes/tags-attachments";
 import { authRoutes } from "./routes/auth";
@@ -93,6 +94,7 @@ export function createApp(): Hono<AppBindings> {
   api.route("/", tagRoutes);
   api.route("/", attachmentRoutes);
   api.route("/", recycleBinRoutes);
+  api.route("/", exportRoutes);
 
   app.route(API_PREFIX, api);
 
