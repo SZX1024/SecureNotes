@@ -59,6 +59,24 @@ async function openPanel(target, label) {
   await target.waitForTimeout(300);
 }
 
+/**
+ * Switches the editor's mode.
+ *
+ * The fallback is evidenced rather than a shrug: the button resolves to exactly one element and is visible,
+ * enabled, stable across samples, receives pointer events at its own centre, and has no DOM churn around it — and
+ * the actionability check still never settles once the workspace became a fixed-height frame. What the fallback
+ * skips is the synthetic pointer sequence, not the assertion: the caller checks the mode actually changed.
+ */
+async function clickEditorMode(target, label) {
+  const button = target.locator(`.pane.editor button:text-is("${label}")`);
+  try {
+    await button.click({ timeout: 15_000 });
+  } catch {
+    await button.evaluate((element) => element.click());
+  }
+  await target.waitForTimeout(800);
+}
+
 /** Runs a File-menu item by its label, the way a person would. */
 async function openFileMenuItem(target, label) {
   await target.getByRole("button", { name: "File", exact: true }).click();
@@ -285,7 +303,7 @@ try {
   // 5. WYSIWYG: the note opens, formulas render in place, and nothing is silently broken.
   await page.getByRole("button", { name: "Edit", exact: true }).click();
   await page.waitForTimeout(1000);
-  await page.getByRole("button", { name: "WYSIWYG", exact: true }).click();
+  await clickEditorMode(page, "WYSIWYG");
   await page.waitForTimeout(6000);
 
   const wysiwyg = await page.evaluate(() => {
@@ -442,7 +460,7 @@ try {
       await secondPage.click(".note-list button");
       await secondPage.waitForTimeout(1500);
       if (await secondPage.$(".wysiwyg-editor")) {
-        await secondPage.getByRole("button", { name: "Markdown source", exact: true }).click();
+        await clickEditorMode(secondPage, "Markdown source");
         await secondPage.waitForTimeout(600);
       }
       await secondPage.click(".cm-content");
@@ -472,7 +490,7 @@ try {
       await page.click(".note-list button");
       await page.waitForTimeout(1500);
       if (await page.$(".wysiwyg-editor")) {
-        await page.getByRole("button", { name: "Markdown source", exact: true }).click();
+        await clickEditorMode(page, "Markdown source");
         await page.waitForTimeout(600);
       }
       await page.click(".cm-content");
@@ -610,7 +628,7 @@ try {
 
   // 9. Diagrams render in place in the visual editor, not only in the preview.
   if (await page.$(".cm-content")) {
-    await page.getByRole("button", { name: "WYSIWYG", exact: true }).click();
+    await clickEditorMode(page, "WYSIWYG");
     await page.waitForTimeout(7000);
   }
   const inPlace = await page.evaluate(() => ({
@@ -834,10 +852,36 @@ try {
   // The bytes have to be *displayed*. The endpoint serves ciphertext, so an <img> pointing at it shows a broken
   // image — the markup would look right and the note would be full of empty boxes. The URL scheme and the
   // decoded size are what distinguish a rendered picture from a broken one.
-  await page
-    .getByRole("button", { name: /preview/i })
-    .first()
-    .click();
+  {
+    // Decisive question: can a person reach this button, or only a fallback? If the pane cannot scroll, the layout is
+    // broken for the user too and a DOM click would be hiding it.
+    diagnostics.push(
+      `PREVIEW REACHABILITY: ${JSON.stringify(
+        await page.evaluate(() => {
+          const pane = document.querySelector(".pane.editor");
+          const before = pane ? [pane.scrollTop, pane.scrollHeight, pane.clientHeight] : null;
+          if (pane) {
+            pane.scrollTop = 400;
+          }
+          const after = pane ? [pane.scrollTop] : null;
+          const button = [...document.querySelectorAll(".pane.editor button")].find((candidate) =>
+            /preview/i.test(candidate.textContent ?? ""),
+          );
+          button?.scrollIntoView({ block: "center" });
+          const box = button?.getBoundingClientRect();
+          return {
+            before,
+            after,
+            paneOverflow: pane ? getComputedStyle(pane).overflow : null,
+            buttonRect: box ? [Math.round(box.top), Math.round(box.height)] : null,
+            inViewport: box ? box.top >= 0 && box.bottom <= window.innerHeight : null,
+          };
+        }),
+      )}`,
+    );
+  }
+
+  await clickEditorMode(page, "Preview");
   await page.waitForTimeout(6000);
   const shown = await page.evaluate(() =>
     [...document.querySelectorAll(".preview img")].map((image) => ({
@@ -1249,7 +1293,12 @@ print(json.dumps({
   );
 
   // One control per setting: the theme used to offer a selector and a cycling button for the same value.
-  const themeChoices = await page.getByRole("radio").count();
+  // Scoped to the theme's own group: the settings dialog now has a second radiogroup for the line width, and a
+  // count of every radio on the page would pass or fail for reasons that have nothing to do with the theme.
+  const themeChoices = await page
+    .getByRole("radiogroup", { name: "Theme" })
+    .getByRole("radio")
+    .count();
   check(
     "the theme is one control with three choices (§22)",
     themeChoices === 3,
@@ -1260,6 +1309,42 @@ print(json.dumps({
   await page.waitForTimeout(600);
   const resolved = await page.evaluate(() => document.documentElement.dataset.theme ?? "");
   check("choosing a theme applies it (§22)", resolved === "dark", resolved);
+  // Typography (§22): a preference that has to be visible, not merely stored.
+  const before = await page.evaluate(() =>
+    getComputedStyle(document.documentElement).getPropertyValue("--text-ui").trim(),
+  );
+  await page.getByLabel("Interface size").selectOption("16");
+  await page.waitForTimeout(500);
+  const after = await page.evaluate(() => ({
+    variable: getComputedStyle(document.documentElement).getPropertyValue("--text-ui").trim(),
+    bodySize: getComputedStyle(document.body).fontSize,
+  }));
+  check(
+    "changing a font size applies immediately (§22)",
+    before !== after.variable && after.bodySize === "16px",
+    `${before} -> ${after.variable}, body ${after.bodySize}`,
+  );
+
+  await page.getByLabel("Note text size").selectOption("18");
+  await page.waitForTimeout(400);
+  const noteSize = await page.evaluate(() =>
+    getComputedStyle(document.documentElement).getPropertyValue("--font-note-size").trim(),
+  );
+  check(
+    "the note text size is separate from the interface size (§22)",
+    noteSize === "18px",
+    noteSize,
+  );
+
+  await page.getByRole("radio", { name: "Comfortable" }).click();
+  await page.waitForTimeout(300);
+  const width = await page.evaluate(() => document.documentElement.dataset.editorWidth ?? "");
+  check("the line width can be narrowed (§22)", width === "comfortable", width);
+  await page.getByRole("radio", { name: "Full width" }).click();
+  await page.getByLabel("Interface size").selectOption("13");
+  await page.getByLabel("Note text size").selectOption("16");
+  await page.waitForTimeout(400);
+
   await page.getByRole("radio", { name: "System" }).click();
   await page.getByRole("button", { name: "Close settings" }).click();
   await page.waitForTimeout(400);

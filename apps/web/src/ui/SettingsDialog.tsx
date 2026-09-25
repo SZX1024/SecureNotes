@@ -1,6 +1,13 @@
 import { useEffect } from "react";
 
 import { SORT_KEYS, SORT_LABELS, type SortKey } from "./sort";
+import {
+  EDITOR_WIDTHS,
+  INTERFACE_SIZES,
+  LINE_HEIGHTS,
+  NOTE_SIZES,
+  type Typography,
+} from "./typography";
 import { Icon } from "./Icon";
 import type { ThemePreference } from "../theme";
 
@@ -21,6 +28,8 @@ export interface SettingsDialogProps {
   onTheme: (theme: ThemePreference) => void;
   sortKey: SortKey;
   onSortKey: (key: SortKey) => void;
+  typography: Typography;
+  onTypography: (typography: Typography) => void;
   version: string;
   onClose: () => void;
 }
@@ -40,6 +49,8 @@ export function SettingsDialog({
   onTheme,
   sortKey,
   onSortKey,
+  typography,
+  onTypography,
   version,
   onClose,
 }: SettingsDialogProps) {
@@ -89,6 +100,78 @@ export function SettingsDialog({
             <p className="muted">
               Following the system changes with it; an explicit choice does not.
             </p>
+          </section>
+
+          <section>
+            <h3>Typography</h3>
+            <div className="settings-grid">
+              <label className="field">
+                <span>Interface size</span>
+                <select
+                  aria-label="Interface size"
+                  value={typography.interfaceSize}
+                  onChange={(event) =>
+                    onTypography({ ...typography, interfaceSize: Number(event.target.value) })
+                  }
+                >
+                  {INTERFACE_SIZES.map((size) => (
+                    <option key={size} value={size}>
+                      {size} px
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="field">
+                <span>Note text size</span>
+                <select
+                  aria-label="Note text size"
+                  value={typography.noteSize}
+                  onChange={(event) =>
+                    onTypography({ ...typography, noteSize: Number(event.target.value) })
+                  }
+                >
+                  {NOTE_SIZES.map((size) => (
+                    <option key={size} value={size}>
+                      {size} px
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="field">
+                <span>Line spacing</span>
+                <select
+                  aria-label="Line spacing"
+                  value={typography.lineHeight}
+                  onChange={(event) =>
+                    onTypography({ ...typography, lineHeight: Number(event.target.value) })
+                  }
+                >
+                  {LINE_HEIGHTS.map((height) => (
+                    <option key={height} value={height}>
+                      {height.toFixed(2)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            <div className="segmented" role="radiogroup" aria-label="Line width">
+              {EDITOR_WIDTHS.map((choice) => (
+                <button
+                  key={choice.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={typography.editorWidth === choice.value}
+                  className={typography.editorWidth === choice.value ? "selected" : undefined}
+                  onClick={() => onTypography({ ...typography, editorWidth: choice.value })}
+                >
+                  {choice.label}
+                </button>
+              ))}
+            </div>
+            <p className="muted">Sizes apply immediately and are remembered on this device.</p>
           </section>
 
           <section>

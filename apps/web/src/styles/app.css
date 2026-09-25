@@ -45,10 +45,9 @@
 .shell {
   display: grid;
   grid-template-columns: var(--panel-width) var(--list-width) 1fr;
-  /* Known defect, recorded rather than hidden: this `100vh` is measured from the top of the page, so with the menu
-     bar above it the workspace is one frame taller than the window and the bars can be scrolled out of it. The fix
-     is to size this row properly, and it is scheduled with the layout hardening rather than smuggled in here. */
-  height: 100vh;
+  /* No height: the frame's row sizes this, and a `100vh` here would be measured from the top of the page — one
+     frame taller than the space actually left between the menu bar and the status bar. */
+  min-height: 0;
   background: var(--bg);
 }
 
@@ -72,6 +71,25 @@
 .pane.editor {
   background: var(--bg);
   border-right: 0;
+  /* The pane itself never scrolls: the title, the organisation fields and the toolbar stay where they are, and the
+     document scrolls between them. A pane that scrolls as a whole takes its own controls away with it — which is
+     how the status bar ended up below the window and the editor's buttons somewhere past the fold. */
+  overflow: hidden;
+}
+
+.editor-host {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  /* Hidden rather than auto: CodeMirror measures itself, and a scroll container wrapped around it makes the two
+     disagree about the height. The editor scrolls; this just gives it the room. */
+  overflow: hidden;
+}
+
+.editor-host > * {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
 }
 
 /* Section headings read as labels rather than as prose: the single change that makes a long sidebar scannable. */
@@ -279,7 +297,7 @@ textarea:focus {
 
 .preview {
   flex: 1;
-  min-height: 12rem;
+  min-height: 0;
   padding: 0.25rem 0;
   overflow: auto;
   border: 1px solid var(--border);
@@ -309,21 +327,23 @@ textarea:focus {
 
 .source-editor .cm-editor,
 .wysiwyg-editor {
-  min-height: 12rem;
   border: 1px solid var(--border);
   border-radius: 0.4rem;
 }
 
 .source-editor .cm-editor {
-  flex: 1;
+  height: 100%;
+  min-height: 0;
 }
 
 .source-editor .cm-scroller {
+  overflow: auto;
   font-family: ui-monospace, monospace;
 }
 
 .wysiwyg-editor {
   flex: 1;
+  min-height: 0;
   padding: 0.5rem;
   overflow: auto;
 }
@@ -589,7 +609,9 @@ textarea:focus {
 
 .app {
   display: grid;
-  grid-template-rows: var(--topbar-height) 1fr var(--status-height);
+  /* `minmax(0, 1fr)` rather than `1fr`: a grid row's automatic minimum is its content, so the editor's document
+     could make the middle row taller than the space between the bars and push the status bar out of the window. */
+  grid-template-rows: var(--topbar-height) minmax(0, 1fr) var(--status-height);
   height: 100vh;
   overflow: hidden;
 }
@@ -913,6 +935,13 @@ button.status-item:hover:not(:disabled) {
   padding: var(--space-6);
 }
 
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: var(--space-5);
+  margin-bottom: var(--space-5);
+}
+
 .settings-body h3 {
   margin: 0 0 var(--space-3);
   font-size: var(--text-xs);
@@ -971,4 +1000,103 @@ button.status-item:hover:not(:disabled) {
   .status-bar {
     gap: var(--space-2);
   }
+}
+
+/* ---------------------------------------------------------------------------------------------------------
+ * The Markdown source editor's own chrome (§12).
+ *
+ * CodeMirror draws its gutters, line numbers, cursor and selection from its default theme, which is light: on a dark
+ * background the line numbers came out as dark grey on dark grey and the selection was invisible. Every one of these
+ * reads a token now, so the editor follows the theme like the rest of the interface.
+ * ------------------------------------------------------------------------------------------------------ */
+
+.source-editor .cm-editor {
+  color: var(--text);
+  background: var(--bg);
+}
+
+.source-editor .cm-gutters {
+  color: var(--muted);
+  background: var(--bg-elevated);
+  border-right: 1px solid var(--border);
+}
+
+.source-editor .cm-lineNumbers .cm-gutterElement {
+  padding: 0 var(--space-3) 0 var(--space-4);
+  color: var(--muted);
+}
+
+/* The line the cursor is on: stated quietly, because it is a position rather than a selection. */
+.source-editor .cm-activeLine {
+  background: var(--bg-hover);
+}
+
+.source-editor .cm-activeLineGutter {
+  color: var(--text);
+  background: var(--bg-active);
+}
+
+.source-editor .cm-cursor,
+.source-editor .cm-dropCursor {
+  border-left: 2px solid var(--text-strong);
+}
+
+.source-editor .cm-selectionBackground,
+.source-editor .cm-content ::selection,
+.source-editor .cm-line::selection {
+  background: var(--selection);
+}
+
+/* CodeMirror sets `background: #d7d4f0` inline for a focused selection, so this has to win. */
+.source-editor .cm-editor.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground {
+  background: var(--selection);
+}
+
+.source-editor .cm-matchingBracket {
+  color: var(--text-strong);
+  background: var(--bg-active);
+  outline: 1px solid var(--focus);
+}
+
+.source-editor .cm-panels,
+.source-editor .cm-tooltip {
+  color: var(--text);
+  background: var(--bg-elevated);
+  border-color: var(--border-strong);
+}
+
+/* Typography (§22): the sizes the settings dialog chooses. Both fall back to the interface's own values so the
+   editor looks right before anything has been chosen. */
+.source-editor .cm-content {
+  font-size: var(--font-note-size, 16px);
+  line-height: var(--line-prose);
+}
+
+.wysiwyg-editor .ProseMirror,
+.preview {
+  font-size: var(--font-note-size, 16px);
+  line-height: var(--line-prose);
+}
+
+/* A comfortable measure for reading and writing, centred in the pane it is given. */
+:root[data-editor-width="comfortable"] .source-editor .cm-content,
+:root[data-editor-width="comfortable"] .wysiwyg-editor .ProseMirror,
+:root[data-editor-width="comfortable"] .preview {
+  max-width: 46rem;
+  margin-inline: auto;
+}
+
+/* The settings dialog is a form: a label above its control, and controls that line up. */
+.settings-body .field {
+  gap: var(--space-2);
+}
+
+.settings-body .field > span {
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.settings-body select {
+  width: 100%;
 }

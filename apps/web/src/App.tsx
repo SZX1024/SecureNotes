@@ -62,6 +62,7 @@ import { Icon } from "./ui/Icon";
 import { MenuBar, type MenuDefinition } from "./ui/MenuBar";
 import { SettingsDialog } from "./ui/SettingsDialog";
 import { StatusBar } from "./ui/StatusBar";
+import { applyTypography, loadTypography, saveTypography, type Typography } from "./ui/typography";
 import { FolderTree, NoteOrganisation, TagList } from "./ui/Organisation";
 import { defaultEditorMode, loadEditorMode, saveEditorMode, type EditorMode } from "./editor/mode";
 import {
@@ -173,6 +174,7 @@ export function App() {
   // Notes by default: opening a notebook and being shown a folder tree is the wrong first impression.
   const [panelView, setPanelView] = useState<PanelView | null>("notes");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [typography, setTypography] = useState<Typography>(() => loadTypography(localStorage));
   const [preview, setPreview] = useState(false);
   const [theme, setTheme] = useState<ThemePreference>(() =>
     typeof localStorage === "undefined" ? "system" : loadThemePreference(localStorage),
@@ -1130,6 +1132,17 @@ export function App() {
    * Derived from the note's own text rather than a separate list, so the panel cannot
    * disagree with what the note actually contains.
    */
+  // Applied to the document rather than through a React tree of CSS classes: the stylesheet reads it, and it has to
+  // survive a change of theme, panes and screens without any of them knowing about it.
+  useEffect(() => {
+    applyTypography(typography, document.documentElement);
+  }, [typography]);
+
+  const chooseTypography = useCallback((next: Typography) => {
+    setTypography(next);
+    saveTypography(localStorage, next);
+  }, []);
+
   /** The hidden import input: the File menu item is an ordinary action, the input keeps its label. */
   const importInput = useRef<HTMLInputElement>(null);
 
@@ -1998,6 +2011,8 @@ export function App() {
           onTheme={chooseTheme}
           sortKey={sortKey}
           onSortKey={setSortKey}
+          typography={typography}
+          onTypography={chooseTypography}
           version={__APP_VERSION__}
           onClose={() => setSettingsOpen(false)}
         />

@@ -109,6 +109,25 @@ await desktop.getByRole("button", { name: "File", exact: true }).click();
 await desktop.waitForTimeout(400);
 await desktop.screenshot({ path: `${OUT}/desktop-dark-file-menu.png` });
 
+// A note open in the Markdown source editor: the gutters, line numbers and selection are the parts that used to
+// come from CodeMirror's own light theme whatever the application was set to.
+await desktop.click(".note-list button");
+await desktop.waitForTimeout(3000);
+await desktop
+  .locator('.pane.editor button:text-is("Markdown source")')
+  .click({ timeout: 10_000 })
+  .catch(() => undefined);
+await desktop.waitForTimeout(1500);
+await desktop.screenshot({ path: `${OUT}/editor-dark.png` });
+
+// The settings dialog, which is where the sizes are chosen.
+await desktop.getByRole("button", { name: "Settings", exact: true }).click();
+await desktop.waitForSelector('[role="dialog"][aria-label="Settings"]', { timeout: 15_000 });
+await desktop.waitForTimeout(600);
+await desktop.screenshot({ path: `${OUT}/settings-dark.png` });
+await desktop.getByRole("button", { name: "Close settings" }).click();
+await desktop.waitForSelector(".overlay", { state: "detached", timeout: 10_000 });
+
 // The phone layout from the same session. A separate context would have to sign in again, and the mobile sign-in
 // screen is not what this is for: the question is what the application looks like on a phone.
 await desktop.getByRole("button", { name: "File", exact: true }).press("Escape");
