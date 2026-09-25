@@ -29,7 +29,7 @@ opening the file. Regenerating it is part of the gate: an item whose evidence di
 | Encryption | Interrupted migration can resume or roll back safely (§31 TOTP migration) | ✅ | `apps/worker/test/crypto-flow.test.ts:304` |
 | Offline | Full offline note editing works | ✅ | `apps/web/src/data/local-data.test.ts:206` |
 | Offline | Folder/tag operations work offline | ✅ | `apps/web/src/data/local-data.test.ts:507` |
-| Offline | Image operations work offline | ✅ | `scripts/e2e/browser.spec.mjs:1155` |
+| Offline | Image operations work offline | ✅ | `scripts/e2e/browser.spec.mjs:1177` |
 | Offline | Unsynced operations survive normal application restarts (§31 offline queue persistence) | ✅ | `apps/web/src/data/local-data.test.ts:552` |
 | Offline | Unsynced data is never automatically evicted (§31 cache eviction) | ✅ | `apps/web/src/local/local-layer.test.ts:295` |
 | Offline | App Lock works | ✅ | `apps/web/src/local/local-layer.test.ts:165` |
@@ -44,33 +44,33 @@ opening the file. Regenerating it is part of the gate: an item whose evidence di
 | Sync | Delete/modify conflicts are detected (§31 delete/modify) | ✅ | `apps/web/src/sync/engine.test.ts:286` |
 | Sync | Tombstones work | ✅ | `apps/web/src/sync/engine.test.ts:332` |
 | Sync | Retry/backoff works (§31 duplicate sync requests) | ✅ | `apps/web/src/sync/engine.test.ts:715` |
-| Sync | Manual Sync Now works | ✅ | `scripts/e2e/browser.spec.mjs:402` |
+| Sync | Manual Sync Now works | ✅ | `scripts/e2e/browser.spec.mjs:424` |
 | Editor | WYSIWYG works | ✅ | `apps/web/src/editor/wysiwyg-documents.test.tsx:77` |
 | Editor | Markdown source mode works | ✅ | `apps/web/src/editor/editor.test.tsx:51` |
 | Editor | HTML sanitization works (§31 XSS, stored XSS, sanitizer bypasses) | ✅ | `apps/web/src/render/sanitize.test.ts:180` |
 | Editor | SVG sanitization works (§31 SVG active content) | ✅ | `apps/web/src/render/sanitize.test.ts:174` |
-| Editor | Mermaid output is sanitized (§31 Mermaid SVG attacks) | ✅ | `apps/web/src/render/markdown.test.ts:184` |
-| Editor | KaTeX output is safely rendered | ✅ | `apps/web/src/render/markdown.test.ts:93` |
+| Editor | Mermaid output is sanitized (§31 Mermaid SVG attacks) | ✅ | `apps/web/src/render/markdown.test.ts:238` |
+| Editor | KaTeX output is safely rendered | ✅ | `apps/web/src/render/markdown.test.ts:147` |
 | Editor | iframe content is isolated (§31 iframe isolation) | ✅ | `apps/web/src/render/sanitize.test.ts:110` |
-| Editor | External HTTPS images work | ✅ | `apps/web/src/render/markdown.test.ts:103` |
+| Editor | External HTTPS images work | ✅ | `apps/web/src/render/markdown.test.ts:157` |
 | Editor | External links use noopener noreferrer | ✅ | `apps/web/src/render/sanitize.test.ts:63` |
 | Editor | Unsupported URL schemes are rejected (§31 path/object manipulation) | ✅ | `apps/web/src/render/sanitize.test.ts:43` |
 | Editor | Code highlighting works | ✅ | `apps/web/src/render/markdown.test.ts:74` |
 | Editor | Tables work in both modes | ✅ | `apps/web/src/render/markdown.test.ts:66` |
 | Editor | Task lists work | ✅ | `apps/web/src/render/sanitize.test.ts:101` |
-| Editor | Paste/drop handling works | ✅ | `scripts/e2e/browser.spec.mjs:805` |
+| Editor | Paste/drop handling works | ✅ | `scripts/e2e/browser.spec.mjs:827` |
 | Data lifecycle | Recycle bin works for 30 days | ✅ | `apps/worker/test/tags-attachments.test.ts:324` |
 | Data lifecycle | Permanent deletion removes required history | ✅ | `apps/worker/test/notes.test.ts:307` |
 | Data lifecycle | Historical versions are limited to 10 | ✅ | `apps/worker/test/notes.test.ts:235` |
 | Data lifecycle | R2 orphan cleanup is asynchronous and idempotent | ✅ | `apps/worker/test/tags-attachments.test.ts:250` |
 | Data lifecycle | Import is fully transactional | ✅ | `apps/web/src/export/import.test.ts:257` |
-| Data lifecycle | Export produces valid ZIP data | ✅ | `scripts/e2e/browser.spec.mjs:988` |
-| Data lifecycle | Recovery package is separate from ordinary export | ✅ | `scripts/e2e/browser.spec.mjs:1242` |
-| Platform | PWA installs | ✅ | `scripts/e2e/browser.spec.mjs:1430` |
+| Data lifecycle | Export produces valid ZIP data | ✅ | `scripts/e2e/browser.spec.mjs:1010` |
+| Data lifecycle | Recovery package is separate from ordinary export | ✅ | `scripts/e2e/browser.spec.mjs:1264` |
+| Platform | PWA installs | ✅ | `scripts/e2e/browser.spec.mjs:1452` |
 | Platform | Offline application shell works | ✅ | `apps/web/src/pwa/service-worker.test.ts:41` |
 | Platform | Service Worker does not destroy unsynced data during updates (§31 SW update) | ✅ | `apps/web/src/pwa/update-gate.test.ts:30` |
 | Platform | IndexedDB migrations preserve data (§31 database migration failure) | ✅ | `apps/web/src/local/migrations.test.ts:161` |
-| Platform | Application version is visible | ✅ | `scripts/e2e/browser.spec.mjs:1401` |
+| Platform | Application version is visible | ✅ | `scripts/e2e/browser.spec.mjs:1423` |
 | Security (§31) | XSS and stored XSS | ✅ | `apps/web/src/render/sanitize.test.ts:24` |
 | Security (§31) | CSS injection | ✅ | `apps/web/src/render/sanitize.test.ts:32` |
 | Security (§31) | CSRF | ✅ | `apps/worker/test/security.test.ts:37` |

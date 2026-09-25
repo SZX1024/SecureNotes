@@ -7,7 +7,7 @@ import {
   roundTrip,
   serializeMarkdown,
 } from "./markdown";
-import { containsActiveContent } from "./sanitize";
+import { containsActiveContent, sanitizeCss } from "./sanitize";
 
 /**
  * Markdown rendering and round-tripping (§12, §31).
@@ -88,6 +88,60 @@ describe("required Markdown features (§12)", () => {
     expect(html).toContain('class="katex"');
     expect(html).not.toContain("a^2 + b^2");
     expect(html).not.toContain("\\int_0^1");
+  });
+
+  it("renders a display formula as display, and inline math inline", () => {
+    // The two are not the same rendering: display mode is centred, larger, and builds a different structure, and
+    // KaTeX decides which from the node the parser produced. Block syntax reaching the inline renderer — or the
+    // reverse — is a formula that renders and is wrong.
+    const display = renderMarkdown(String.raw`$$
+\frac{a}{b}
+$$`);
+    expect(display).toContain("katex-display");
+
+    const inline = renderMarkdown(String.raw`The value $\frac{a}{b}$ in a sentence.`);
+    expect(inline).toContain('class="katex"');
+    expect(inline).not.toContain("katex-display");
+  });
+
+  it("keeps the inline styles KaTeX positions its markup with", () => {
+    // KaTeX sets heights, widths and offsets inline: a fraction's halves are stacked by a `height`, a radical's rule
+    // by a `border-bottom-width`, a matrix cell's width by a `min-width`. The sanitizer filters style declarations
+    // through an allowlist, and the failure mode of a missing entry is not a rejected formula — it is a formula that
+    // renders and is visibly wrong, which no count of `.katex` elements can see. So the properties checked here are
+    // the ones KaTeX actually emits, rather than a list someone believed was right.
+    const sources = [
+      String.raw`$$\frac{a}{b}$$`,
+      String.raw`$$\sqrt{x^2+y^2}$$`,
+      String.raw`$$\int_0^1 x^2\,dx$$`,
+      String.raw`$$\sum_{i=1}^{n} i$$`,
+      String.raw`$$\begin{pmatrix} a & b \\ c & d \end{pmatrix}$$`,
+      String.raw`$$\lim_{x \to 0} \frac{\sin x}{x}$$`,
+      String.raw`$$\overline{AB}$$`,
+      String.raw`$$H\psi = E\psi$$`,
+      String.raw`$x^2$`,
+    ];
+
+    const properties = new Set<string>();
+    for (const source of sources) {
+      for (const match of renderMarkdown(source).matchAll(/style="([^"]*)"/g)) {
+        for (const declaration of (match[1] ?? "").split(";")) {
+          const name = declaration.split(":")[0]?.trim() ?? "";
+          if (/^[a-z-]+$/.test(name)) {
+            properties.add(name);
+          }
+        }
+      }
+    }
+
+    expect(properties.size).toBeGreaterThan(3);
+    for (const name of properties) {
+      const value = name === "position" ? "relative" : "1em";
+      expect(
+        sanitizeCss(`${name}: ${value}`),
+        `${name} must survive the sanitizer or formulas lose their layout`,
+      ).not.toBe("");
+    }
   });
 
   it("does not allow arbitrary HTML inside a formula (§12)", () => {

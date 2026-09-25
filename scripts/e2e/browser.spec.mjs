@@ -281,6 +281,28 @@ try {
   });
 
   check("formulas render", preview.katex >= 3, `${preview.katex}`);
+
+  // Rendering is not the same as rendering correctly, and counting `.katex` elements cannot tell the difference — the
+  // markup is all there whether or not the stylesheet that gives it meaning was ever loaded. The thickness of a
+  // fraction's rule and the centring of display maths come from that stylesheet and from nowhere else, so they are
+  // what is measured here. This is the check that was missing when block formulas "rendered but were wrong".
+  const mathGeometry = await page.evaluate(() => {
+    const rule = document.querySelector(".katex .frac-line");
+    const display = document.querySelector(".katex-display");
+    const inner = document.querySelector(".katex .vlist > span");
+    return {
+      fracLineThickness: rule ? getComputedStyle(rule).borderBottomWidth : null,
+      displayAlign: display ? getComputedStyle(display).textAlign : null,
+      innerDisplay: inner ? getComputedStyle(inner).display : null,
+    };
+  });
+  check(
+    "a block formula is displayed with its layout intact (§12)",
+    mathGeometry.fracLineThickness !== null &&
+      mathGeometry.fracLineThickness !== "0px" &&
+      mathGeometry.displayAlign === "center",
+    JSON.stringify(mathGeometry),
+  );
   check("diagrams render", preview.diagrams >= 1, `${preview.diagrams}`);
   check(
     "diagram styling survives the SVG sanitizer",

@@ -1,3 +1,6 @@
+// The stylesheet KaTeX's markup depends on. This module is the lazily loaded render pipeline, so importing it here
+// keeps the first load free of it.
+import "katex/dist/katex.min.css";
 import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
 import rehypeStringify from "rehype-stringify";

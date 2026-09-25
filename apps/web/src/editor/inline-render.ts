@@ -64,6 +64,11 @@ function mathElement(tex: string, display: boolean): HTMLElement {
 // `katex` is imported statically here rather than dynamically: this module is already inside
 // the lazily loaded editor chunk, and a synchronous decoration needs the renderer available.
 import katex from "katex";
+// The stylesheet is not optional. KaTeX's output is a tree of spans whose meaning — fractions, radicals, sub- and
+// superscripts, spacing, and the whole of display mode — lives in its CSS; without it the formula renders as a
+// readable-looking jumble of symbols, which is exactly what "it renders but incorrectly" was. Imported here rather
+// than in the entry so its cost lands in the editor's own chunk.
+import "katex/dist/katex.min.css";
 
 function renderToString(tex: string, display: boolean): string {
   return katex.renderToString(tex, { displayMode: display, throwOnError: false, trust: false });
