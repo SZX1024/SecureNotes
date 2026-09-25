@@ -460,15 +460,24 @@ button.primary {
 /* Conflict resolution (§16): three columns, because the decision needs all three versions. */
 .conflict-panel {
   top: 8%;
+  box-sizing: border-box;
   width: min(64rem, 94vw);
+  max-width: 94vw;
   max-height: 84vh;
   overflow: auto;
 }
 
 .conflict-columns {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  /* minmax(0, 1fr) rather than 1fr: a grid item's default minimum is its content, and a note with a long
+     unbroken line would otherwise widen the column — and with it the whole panel — far past the viewport,
+     pushing the buttons out of reach. */
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.5rem;
+}
+
+.conflict-columns section {
+  min-width: 0;
 }
 
 .conflict-columns h3 {
@@ -483,6 +492,8 @@ button.primary {
   overflow: auto;
   font-size: 0.8rem;
   white-space: pre-wrap;
+  /* A long URL is a single token: without this it sets the column's minimum width. */
+  overflow-wrap: anywhere;
   border: 1px solid var(--border);
   border-radius: 0.4rem;
 }

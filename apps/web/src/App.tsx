@@ -1256,8 +1256,13 @@ export function App() {
           account={account}
           objectId={resolvingConflict}
           onResolved={async () => {
+            // The resolution already reached the server by the time this runs, so the interface can be
+            // corrected from the local database immediately rather than waiting for the next pass: the
+            // marker is cleared, the count follows from it, and the note is no longer paused.
             await refresh(db, account);
-            await scheduler.current?.syncNow();
+            setConflictCount((await listLocalConflicts(db)).length);
+            setSyncState("synced");
+            scheduler.current?.scheduleAfterIdle();
           }}
           onClose={() => setResolvingConflict(null)}
         />

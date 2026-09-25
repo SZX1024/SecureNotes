@@ -108,6 +108,10 @@ page.on("console", (message) => {
 });
 page.on("pageerror", (error) => pageErrors.push(String(error)));
 
+/** The app's own trace, so a step that hangs can say where it stopped. */
+const appLogs = [];
+page.on("console", (message) => appLogs.push(`${message.type()}: ${message.text()}`));
+
 /** Records what the client actually sent, so a mismatch can be read rather than guessed at. */
 const noteCalls = [];
 /** Every API response that failed, so a 500 names the request that caused it. */
@@ -343,6 +347,7 @@ try {
   await page.waitForTimeout(4000);
 
   diagnostics.push(`API CALLS: ${JSON.stringify(noteCalls.slice(-24))}`);
+  diagnostics.push(`APP LOGS: ${JSON.stringify(appLogs.slice(-12))}`);
   const syncLabel = (await page.getByTestId("sync-state").textContent()) ?? "";
   check(
     "the interface reports a state from §17",
@@ -482,19 +487,65 @@ try {
         columns.remote.includes("second device edit"),
       );
 
+      // What is actually on top of that button decides whether a click can reach it at all.
+      diagnostics.push(
+        `KEEP LOCAL HIT TEST: ${JSON.stringify(
+          await page.evaluate(() => {
+            const button = [...document.querySelectorAll("button")].find(
+              (candidate) => candidate.textContent?.trim() === "Keep local",
+            );
+            if (!button) {
+              return "no button";
+            }
+            const rect = button.getBoundingClientRect();
+            const top = document.elementFromPoint(
+              rect.left + rect.width / 2,
+              rect.top + rect.height / 2,
+            );
+            return {
+              disabled: button.disabled,
+              coveredBy: top === button ? "itself" : `${top?.tagName}.${top?.className ?? ""}`,
+              rect: [
+                Math.round(rect.x),
+                Math.round(rect.y),
+                Math.round(rect.width),
+                Math.round(rect.height),
+              ],
+              viewport: [window.innerWidth, window.innerHeight],
+            };
+          }),
+        )}`,
+      );
       await page.getByRole("button", { name: "Keep local", exact: true }).click();
-      // Quiet again: the resolution triggers a pass, and the next checks read the server's revision.
-      check("the first device settles after resolving", (await waitForQuiet(page)) !== "timed out");
-      console.log(
-        "AFTER RESOLVE:",
-        JSON.stringify(
-          await page.evaluate(
-            () =>
-              document
-                .querySelector('[aria-label="Resolve conflict"]')
-                ?.textContent?.slice(0, 200) ?? "(panel closed)",
-          ),
-        ),
+      // The conflict state has to be waited for *out*: a conflict is a settled state, so the general
+      // "is it quiet?" helper returns immediately with the very label under test.
+      const cleared = await page
+        .waitForFunction(
+          () =>
+            !/Conflict/i.test(
+              document.querySelector('[data-testid="sync-state"]')?.textContent ?? "",
+            ),
+          { timeout: 30_000 },
+        )
+        .then(() => true)
+        .catch(() => false);
+      check("the conflict clears after a resolution (§16)", cleared);
+      diagnostics.push(
+        `AFTER RESOLVE: ${JSON.stringify(
+          await page.evaluate(() => {
+            const panel = document.querySelector('[aria-label="Resolve conflict"]');
+            return {
+              open: panel !== null,
+              // The panel renders the failure here, which is the fastest way to see why a resolution did not
+              // take effect.
+              error: panel?.querySelector(".error")?.textContent ?? null,
+              keepLocal: [...document.querySelectorAll("button")].some(
+                (button) => button.textContent?.trim() === "Keep local",
+              ),
+              label: document.querySelector('[data-testid="sync-state"]')?.textContent ?? null,
+            };
+          }),
+        )}`,
       );
 
       const resolvedLabel = (await page.getByTestId("sync-state").textContent()) ?? "";
@@ -585,11 +636,25 @@ try {
     /Move its notes and subfolders out/i.test(refusal),
   );
 
-  // And the organisation reaches the server.
-  await page.getByRole("button", { name: "Sync now", exact: true }).click();
+  // And the organisation reaches the server. Whether a pass runs at all decides where a failure lies, so
+  // record what the click produces instead of waiting a fixed time and inspecting the server afterwards.
+  const callsBefore = noteCalls.length;
+  const syncButton = page.getByRole("button", { name: "Sync now", exact: true });
+  check("the sync control is available", await syncButton.isEnabled());
+  await syncButton.click();
+
+  const passDeadline = Date.now() + 25_000;
+  while (Date.now() < passDeadline && noteCalls.length === callsBefore) {
+    await page.waitForTimeout(500);
+  }
+  const passCalls = noteCalls
+    .slice(callsBefore)
+    .map((call) => `${call.method} ${call.path} -> ${call.status}`);
+  diagnostics.push(`PASS AFTER ORGANISATION: ${JSON.stringify(passCalls)}`);
   check(
-    "the device settles after the organisation changes",
-    (await waitForQuiet(page)) !== "timed out",
+    "a sync pass runs after the organisation changes",
+    passCalls.length > 0,
+    JSON.stringify(passCalls),
   );
 
   const onServer = await page.evaluate(async () => {
