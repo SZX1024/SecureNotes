@@ -3,6 +3,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, apiRequest } from "./api/client";
 import { applyRemote } from "./sync/apply";
 import { hasSessionCookie, isOnline, pullChanges, pushChange } from "./sync/client";
+import { loadNoteConflict, resolveNoteConflict } from "./sync/conflicts-client";
+import { threeWayMerge } from "./sync/merge";
+import type { ConflictSides } from "./sync/conflicts-client";
 import { listLocalConflicts, syncNow, type SyncState } from "./sync/engine";
 import { SyncScheduler, attachSyncTriggers } from "./sync/scheduler";
 import {
@@ -114,6 +117,8 @@ export function App() {
   /** §17: the state the interface shows. */
   const [syncState, setSyncState] = useState<SyncState>("synced");
   const [conflictCount, setConflictCount] = useState(0);
+  /** Which conflict is open in the resolution panel, if any. */
+  const [resolvingConflict, setResolvingConflict] = useState<string | null>(null);
   const scheduler = useRef<SyncScheduler | null>(null);
   /** The references the note had when it was opened, for the save-time diff. */
   const [openedRefs, setOpenedRefs] = useState<string[]>([]);
@@ -788,6 +793,20 @@ export function App() {
             <button type="button" onClick={() => void scheduler.current?.syncNow()}>
               Sync now
             </button>
+            {conflictCount > 0 && (
+              <button
+                type="button"
+                onClick={async () => {
+                  const open = await listLocalConflicts(db);
+                  const first = open.find((entry) => entry.objectType === "note");
+                  if (first) {
+                    setResolvingConflict(first.objectId);
+                  }
+                }}
+              >
+                Resolve a conflict
+              </button>
+            )}
           </section>
           <label className="field">
             <span>Theme</span>
@@ -985,6 +1004,19 @@ export function App() {
         />
       )}
 
+      {resolvingConflict && account && (
+        <ConflictPanel
+          db={db}
+          account={account}
+          objectId={resolvingConflict}
+          onResolved={async () => {
+            await refresh(db, account);
+            await scheduler.current?.syncNow();
+          }}
+          onClose={() => setResolvingConflict(null)}
+        />
+      )}
+
       {pastePrompt && (
         <div className="palette" role="dialog" aria-label="Paste rich text">
           <p>This paste came from a web page. How should it be inserted?</p>
@@ -1042,6 +1074,155 @@ export function App() {
         </div>
       )}
     </main>
+  );
+}
+
+/**
+ * Resolving a conflict (§16).
+ *
+ * Three columns, because that is what the decision needs: what the note looked like before either edit,
+ * what this device did, and what the server has. The actions are the three §16 names, and the manual
+ * merge offers a suggested result with the unresolved regions left visible as markers rather than
+ * quietly resolved.
+ */
+function ConflictPanel({
+  db,
+  account,
+  objectId,
+  onResolved,
+  onClose,
+}: {
+  db: SecureNotesDatabase;
+  account: UnlockedAccount;
+  objectId: string;
+  onResolved: () => Promise<void>;
+  onClose: () => void;
+}) {
+  const [sides, setSides] = useState<ConflictSides | null>(null);
+  const [suggestion, setSuggestion] = useState<string | null>(null);
+  const [merged, setMerged] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadNoteConflict(
+      { db, dek: account.dek, keyVersion: account.keyVersion, userId: account.userId },
+      objectId,
+    )
+      .then((loaded) => {
+        if (!cancelled) {
+          setSides(loaded);
+        }
+      })
+      .catch((caught: unknown) => {
+        if (!cancelled) {
+          setError(caught instanceof Error ? caught.message : "The conflict could not be read.");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [db, account, objectId]);
+
+  const resolve = async (choice: "local" | "remote" | "merged", mergedText?: string) => {
+    if (!sides) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await resolveNoteConflict(
+        { db, dek: account.dek, keyVersion: account.keyVersion, userId: account.userId },
+        mergedText === undefined ? { sides, choice } : { sides, choice, mergedText },
+      );
+      await onResolved();
+      onClose();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The conflict could not be resolved.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="palette conflict-panel" role="dialog" aria-label="Resolve conflict">
+      <h2>Resolve conflict</h2>
+
+      {error && <p className="error">{error}</p>}
+
+      {sides === null ? (
+        <p className="muted">Loading the three versions…</p>
+      ) : suggestion !== null ? (
+        <>
+          <p className="muted">
+            Merged automatically. Any region both sides changed is left marked — edit it and resolve
+            when it reads the way you want.
+          </p>
+          <textarea
+            className="note-body"
+            aria-label="Merged note"
+            value={merged}
+            onChange={(event) => setMerged(event.target.value)}
+          />
+          <button
+            type="button"
+            className="primary"
+            disabled={busy}
+            onClick={() => void resolve("merged", merged)}
+          >
+            Resolve with this
+          </button>
+          <button type="button" onClick={() => setSuggestion(null)}>
+            Back
+          </button>
+        </>
+      ) : (
+        <>
+          <div className="conflict-columns">
+            <section data-testid="conflict-base">
+              <h3>Base</h3>
+              <pre>{sides.base ?? "unavailable (history pruned)"}</pre>
+            </section>
+            <section data-testid="conflict-local">
+              <h3>Local</h3>
+              <pre>{sides.local}</pre>
+            </section>
+            <section data-testid="conflict-remote">
+              <h3>Remote</h3>
+              <pre>{sides.remote}</pre>
+            </section>
+          </div>
+          <button
+            type="button"
+            className="primary"
+            disabled={busy}
+            onClick={() => void resolve("local")}
+          >
+            Keep local
+          </button>
+          <button type="button" disabled={busy} onClick={() => void resolve("remote")}>
+            Keep remote
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              // A missing ancestor still merges: everything is then treated as a conflicted region, which
+              // is visible rather than guessed.
+              const result = threeWayMerge(sides.base ?? "", sides.local, sides.remote);
+              setMerged(result.text);
+              setSuggestion(result.text);
+            }}
+          >
+            Manual merge
+          </button>
+          <button type="button" onClick={onClose}>
+            Later
+          </button>
+        </>
+      )}
+    </div>
   );
 }
 

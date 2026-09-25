@@ -48,6 +48,8 @@ async function conflicts() {
         id: string;
         objectId: string;
         baseRevision: number | null;
+        /** The revision the remote side is stored under, which is also its AAD revision. */
+        remoteRevision: number;
         local: { ciphertext: string };
         remote: { ciphertext: string };
       }>;
@@ -84,6 +86,9 @@ describe("conflicts (§16)", () => {
     expect(open).toHaveLength(1);
     // Base, local and remote are all retained; the local work is the part that must never be lost.
     expect(open[0]!.baseRevision).toBe(1);
+    // The revision the remote side is stored under, which the client needs as the AAD revision to
+    // decrypt it and as the basis for the resolution's own revision.
+    expect(open[0]!.remoteRevision).toBe(2);
     expect(open[0]!.local.ciphertext).toBe("bG9jYWw=");
     expect(open[0]!.remote.ciphertext).toBe("cmVtb3Rl");
   });

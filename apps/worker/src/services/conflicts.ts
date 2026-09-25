@@ -43,6 +43,13 @@ export function serializeConflict(row: ConflictRow) {
     objectType: row.object_type,
     objectId: row.object_id,
     baseRevision: row.base_revision,
+    /**
+     * The revision the remote envelope is stored under.
+     *
+     * The client needs it twice: it is part of the AAD the remote side must be decrypted with, and the
+     * resolution is written as the revision after it.
+     */
+    remoteRevision: row.remote_revision,
     local: {
       crypto_version: row.local_crypto_version,
       key_version: row.local_key_version,

@@ -38,6 +38,8 @@ function totpFromBase32(secret) {
 }
 
 const failures = [];
+/** Diagnostics kept for a failing run: printed at the end, silent on a pass. */
+const diagnostics = [];
 const notes = [];
 
 function check(label, condition, detail = "") {
@@ -58,6 +60,13 @@ function check(label, condition, detail = "") {
  */
 const EMBED_ORIGINATED =
   /writeEmbed|caches' property|allow-same-origin|youtube|Uncaught undefined/i;
+
+/**
+ * A conflict is an expected outcome rather than a fault, and this run deliberately creates one: the
+ * stale edit is answered with 409, which is the mechanism §16 asks for and which the checks below
+ * assert.
+ */
+const EXPECTED_CONFLICT = /409 \(Conflict\)/;
 
 const browser = await chromium.launch({
   executablePath: "/usr/bin/google-chrome",
@@ -301,11 +310,11 @@ try {
   await page.getByRole("button", { name: "Sync now", exact: true }).click();
   await page.waitForTimeout(4000);
 
-  console.log("SYNC CALLS:", JSON.stringify(noteCalls.slice(-8)));
+  diagnostics.push(`SYNC CALLS: ${JSON.stringify(noteCalls.slice(-8))}`);
   const syncLabel = (await page.getByTestId("sync-state").textContent()) ?? "";
   check(
-    "the interface reports a sync state (§17)",
-    /Synced|Pending|Syncing/.test(syncLabel),
+    "the interface reports a state from §17",
+    /Synced|Pending|Syncing|Conflict|Offline|Sync error|Sign in/.test(syncLabel),
     syncLabel.trim(),
   );
 
@@ -354,6 +363,110 @@ try {
         pulled >= 1,
         `${pulled} note(s)`,
       );
+
+      // The second device edits the same note and uploads it.
+      await secondPage.click(".note-list button");
+      await secondPage.waitForTimeout(1500);
+      if (await secondPage.$(".wysiwyg-editor")) {
+        await secondPage.getByRole("button", { name: "Markdown source", exact: true }).click();
+        await secondPage.waitForTimeout(600);
+      }
+      await secondPage.click(".cm-content");
+      await secondPage.keyboard.insertText("\n\nsecond device edit\n");
+      await secondPage.getByRole("button", { name: /save/i }).click();
+      await secondPage.waitForTimeout(1200);
+      await secondPage.getByRole("button", { name: "Sync now", exact: true }).click();
+      await secondPage.waitForTimeout(5000);
+
+      const revisionAfterSecondDevice = await secondPage.evaluate(async () => {
+        const payload = await (await fetch("/api/v1/notes", { credentials: "same-origin" })).json();
+        return (payload.data?.notes ?? [])[0]?.revision ?? 0;
+      });
+      check(
+        "the second device's edit reached the server (§16)",
+        revisionAfterSecondDevice >= 2,
+        `revision ${revisionAfterSecondDevice}`,
+      );
+
+      // The first device edits from a revision the server has moved past. That is a conflict, and it must
+      // neither be applied nor silently overwrite the other edit.
+      await page.click(".note-list button");
+      await page.waitForTimeout(1500);
+      if (await page.$(".wysiwyg-editor")) {
+        await page.getByRole("button", { name: "Markdown source", exact: true }).click();
+        await page.waitForTimeout(600);
+      }
+      await page.click(".cm-content");
+      await page.keyboard.insertText("\n\nfirst device edit\n");
+      await page.getByRole("button", { name: /save/i }).click();
+      await page.waitForTimeout(1200);
+      await page.getByRole("button", { name: "Sync now", exact: true }).click();
+      await page.waitForTimeout(6000);
+
+      const conflictedLabel = (await page.getByTestId("sync-state").textContent()) ?? "";
+      check(
+        "a stale edit becomes a conflict, not an overwrite (§16)",
+        /Conflict/i.test(conflictedLabel),
+        conflictedLabel.trim(),
+      );
+
+      // The three versions §16 requires, then a decision.
+      await page.getByRole("button", { name: /resolve a conflict/i }).click();
+      await page.waitForSelector('[aria-label="Resolve conflict"]', { timeout: 20_000 });
+      await page.waitForTimeout(2500);
+
+      const panelText = await page.evaluate(
+        () =>
+          document.querySelector('[aria-label="Resolve conflict"]')?.textContent?.slice(0, 300) ??
+          "(no panel)",
+      );
+      diagnostics.push(`CONFLICT PANEL: ${JSON.stringify(panelText)}`);
+
+      const columns = await page.evaluate(() => ({
+        local: document.querySelector('[data-testid="conflict-local"] pre')?.textContent ?? "",
+        remote: document.querySelector('[data-testid="conflict-remote"] pre')?.textContent ?? "",
+      }));
+      check(
+        "all three versions are shown (§16)",
+        columns.local.length > 0 && columns.remote.length > 0,
+        `local ${columns.local.length}, remote ${columns.remote.length}`,
+      );
+      check("the local column is this device's text", columns.local.includes("first device edit"));
+      check(
+        "the remote column is the other device's text",
+        columns.remote.includes("second device edit"),
+      );
+
+      await page.getByRole("button", { name: "Keep local", exact: true }).click();
+      await page.waitForTimeout(6000);
+      console.log(
+        "AFTER RESOLVE:",
+        JSON.stringify(
+          await page.evaluate(
+            () =>
+              document
+                .querySelector('[aria-label="Resolve conflict"]')
+                ?.textContent?.slice(0, 200) ?? "(panel closed)",
+          ),
+        ),
+      );
+
+      const resolvedLabel = (await page.getByTestId("sync-state").textContent()) ?? "";
+      check(
+        "resolving clears the conflict (§16)",
+        !/Conflict/i.test(resolvedLabel),
+        resolvedLabel.trim(),
+      );
+
+      const finalRevision = await page.evaluate(async () => {
+        const payload = await (await fetch("/api/v1/notes", { credentials: "same-origin" })).json();
+        return (payload.data?.notes ?? [])[0]?.revision ?? 0;
+      });
+      check(
+        "the resolution is written as a new revision (§16)",
+        finalRevision > revisionAfterSecondDevice,
+        `${revisionAfterSecondDevice} -> ${finalRevision}`,
+      );
     }
   } finally {
     await secondContext.close();
@@ -399,7 +512,9 @@ try {
 
   // 11. The app's own errors.
   const ownPageErrors = pageErrors.filter((message) => !EMBED_ORIGINATED.test(message));
-  const ownConsoleErrors = consoleErrors.filter((message) => !EMBED_ORIGINATED.test(message));
+  const ownConsoleErrors = consoleErrors.filter(
+    (message) => !EMBED_ORIGINATED.test(message) && !EXPECTED_CONFLICT.test(message),
+  );
   check(
     "no uncaught errors in the app",
     ownPageErrors.length === 0,
@@ -429,6 +544,9 @@ try {
 console.log(notes.join("\n"));
 if (failures.length > 0) {
   console.log(failures.join("\n"));
+  for (const entry of diagnostics) {
+    console.log(`  diagnostic ${entry}`);
+  }
   console.log(`e2e browser checks: ${notes.length} passed, ${failures.length} failed`);
   process.exit(1);
 }
