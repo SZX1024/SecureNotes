@@ -428,3 +428,29 @@ describe("attachment content envelope (§7, §12)", () => {
     expect(new TextDecoder().decode(served)).toContain("NETSCAPE2.0");
   });
 });
+
+describe("the attachment wire shape", () => {
+  it("carries what a client needs to decrypt the content", async () => {
+    const id = "018f0000-0000-7000-8000-0000000000aa";
+    await uploadAttachment(id);
+
+    const response = await authedRequest<{
+      ok: true;
+      data: {
+        attachment: {
+          contentIv: string;
+          cryptoVersion: number;
+          keyVersion: number;
+          contentType: string;
+        };
+      };
+    }>(`/attachments/${id}`, jar);
+
+    // The content response is bare ciphertext, so the IV and the versions can only come from the metadata.
+    // Without them no device can assemble the envelope, and every image in a note is a broken picture.
+    expect(response.body.data.attachment.contentIv).toBe("AAAAAAAAAAAAAAAA");
+    expect(response.body.data.attachment.cryptoVersion).toBeGreaterThanOrEqual(1);
+    expect(response.body.data.attachment.keyVersion).toBeGreaterThanOrEqual(1);
+    expect(response.body.data.attachment.contentType).toBe("image/png");
+  });
+});

@@ -1341,7 +1341,6 @@ ok  the interface reports a sync state (§17) (Synced)
 
 `pnpm check` ✅ **545 测试**（31 + 291 + 223）· `pnpm e2e` ✅ **55 项**（含组织与冲突闭环）· 工作树干净。
 
-
 ## 30. 「不能粘贴/拖动图片」：两个真实缺陷
 
 ### 30.1 复现方式（此前**完全没有**端到端覆盖）
@@ -1378,3 +1377,47 @@ E2E 一直只验证「笔记里**已有**的图片能渲染」，**从未**验�
 - E2E **仍有 2 项红**：新增的「队列排空＝服务端已接受链接」断言，以及我插入「新建笔记」步骤后干扰到的后续一项。
   原因已定位到方向：链接**按设计等待笔记自身条目确认**，而该笔记条目在测试窗口内没有清空
   （需要继续查明是笔记推送被阻塞还是压缩/顺序问题）。**我不把这条断言标绿。**
+
+
+## 31. 「图片无法正常加载」：三个真实缺陷
+
+### 31.1 缺陷一：根本没有「解密后显示」这一步
+
+服务端 `/attachments/:id/content` 返回的是**密文**（`application/octet-stream`），而客户端**从未有解密显示代码**。
+于是 `<img src="/api/v1/attachments/<id>/content">` 让浏览器去渲染一段密文 —— **碎图**。附件面板里的链接同样打不开。
+
+修：新增 `src/data/attachment-content.ts` —— 取回 → **在页面内解密** → 生成 **blob URL**（不是 data URL：大图不该被复制成 base64）；
+按 id 缓存（同一张图显示两次只取一次），并在锁屏/卸载时 `revokeObjectURL`（对象 URL 会一直占住字节）。
+预览与附件面板都改用解密后的地址。
+
+### 31.2 缺陷二：IV 与内容版本**从未暴露给客户端**
+
+`/content` 只给裸密文，装配信封所需的 **IV** 与内容信封的 `crypto_version` / `key_version` 只能来自元数据接口，
+而 `serializeAttachment` **一个都没给**。没有它们，**任何设备都无法解密任何附件**。
+（这正是运行时错误 `crypto_version must be a positive integer` 的来源。）
+
+### 31.3 缺陷三：我自己的 URL 拼错了一次
+
+`apiRequest` 的路径是**相对 `/api/v1`** 的，而我用了含完整前缀的常量（那个常量为 Markdown 里的地址而生）→
+实际请求变成 `/api/v1/api/v1/attachments/…` → 全部 404。已抽出 `metadataPath()` 并写明原因。
+
+### 31.4 顺带修掉的两个同步缺陷（由「链接未排空」的断言逼出）
+
+1. **被推迟的工作没有任何计时器去唤醒**：失败重试会把时间写进队列，但没有任何东西在到点时跑一趟；
+   于是「链接」要等用户碰巧编辑别的内容才被处理。现在 `syncNow` 回报 `nextRetryAt`，由 App 定时唤醒。
+2. **链接的等待规则过严**（上一批我引入的）会**死锁**：处于冲突中的笔记其条目永远不清空，牵连它的附件永远不被链接。
+   现收窄为「**仅当该笔记的 create 尚未确认时**推迟」，冲突中的笔记持有的是 update，不再阻塞附件；被推迟时安排 1 秒后的跟进。
+
+### 31.5 验证
+
+`pnpm check` ✅ **561 测试**（31 + 306 + 224）· `pnpm e2e` ✅ **59 项**，其中：
+
+```text
+ok  pasting and dropping an image upload it (§12)          两次 201
+ok  the images are listed as attachments (§12)
+ok  the pasted image is displayed, decrypted (§12)         blob: URL，naturalWidth = 1（真解出了像素）
+ok  the server accepted the attachment links (§12)         队列排空，服务端已接受
+```
+
+诊断信息依旧只在失败时打印；本轮正是靠 `[att] failed … crypto_version must be a positive integer`
+与 `LINK STATE: {…, "attempts":[1,0]}` 这两条记录定位到真因的。

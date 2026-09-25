@@ -653,3 +653,84 @@ describe("upload order (§16)", () => {
     await close();
   });
 });
+
+describe("work that has to wait (§16)", () => {
+  it("holds a link back while its note has not been created, and says when to try again", async () => {
+    const { db, close } = await freshDb();
+    await enqueueChange(db, {
+      objectType: "note",
+      objectId: "note-1",
+      operation: "create",
+      baseRevision: null,
+    });
+    await enqueueChange(db, {
+      objectType: "note_attachment",
+      objectId: "note-1",
+      operation: "update",
+      baseRevision: null,
+    });
+
+    const pushed: string[] = [];
+    const outcome = await syncNow({
+      db,
+      push: async (change) => {
+        pushed.push(change.objectType);
+        return "ok";
+      },
+      pull: async (since) => ({ cursor: since, changes: [], hasMore: false }),
+      apply: async () => "applied",
+    });
+
+    // The note goes; the link waits, because a link for a note the server has never heard of is a 404.
+    expect(pushed).toEqual(["note"]);
+    // And the wait is scheduled: without a time to wake up, the link waits for an unrelated edit instead.
+    expect(outcome.nextRetryAt).not.toBeNull();
+    await close();
+  });
+
+  it("sends the link once the note's create is gone", async () => {
+    const { db, close } = await freshDb();
+    await enqueueChange(db, {
+      objectType: "note_attachment",
+      objectId: "note-1",
+      operation: "update",
+      baseRevision: null,
+    });
+
+    const pushed: string[] = [];
+    await syncNow({
+      db,
+      push: async (change) => {
+        pushed.push(change.objectType);
+        return "ok";
+      },
+      pull: async (since) => ({ cursor: since, changes: [], hasMore: false }),
+      apply: async () => "applied",
+    });
+
+    expect(pushed).toEqual(["note_attachment"]);
+    await close();
+  });
+
+  it("reports when a transient failure will be retried", async () => {
+    const { db, close } = await freshDb();
+    await enqueueChange(db, {
+      objectType: "note",
+      objectId: "note-1",
+      operation: "update",
+      baseRevision: 1,
+    });
+
+    const outcome = await syncNow({
+      db,
+      push: async () => "retry",
+      pull: async (since) => ({ cursor: since, changes: [], hasMore: false }),
+      apply: async () => "applied",
+    });
+
+    // A scheduled retry with nobody to honour it is just a delay, so the pass reports the time.
+    expect(outcome.nextRetryAt).not.toBeNull();
+    expect(outcome.nextRetryAt!).toBeGreaterThan(Date.now());
+    await close();
+  });
+});

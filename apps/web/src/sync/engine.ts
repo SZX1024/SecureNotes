@@ -181,6 +181,14 @@ export interface SyncDependencies {
 }
 
 export interface SyncOutcome {
+  /**
+   * When the next attempt becomes due, if anything was deferred.
+   *
+   * A failure that is scheduled for later needs something to wake up and honour it; without this the entry
+   * simply waits for the next unrelated edit, and a note whose folder or link arrived too early stays
+   * unlinked until the user happens to do something else.
+   */
+  nextRetryAt: number | null;
   pushed: number;
   pulled: number;
   conflicts: number;
@@ -280,6 +288,7 @@ export async function syncNow(deps: SyncDependencies): Promise<SyncOutcome> {
 
   let pushed = 0;
   let conflicts = 0;
+  let nextRetryAt: number | null = null;
   let stoppedBy: "auth" | "none" = "none";
 
   const queued = await deps.db.syncQueue.orderBy("queuedAt").toArray();
@@ -309,28 +318,15 @@ export async function syncNow(deps: SyncDependencies): Promise<SyncOutcome> {
     note_attachment: 5,
   };
   /**
-   * A link cannot be pushed before its note exists.
+   * Links are ordered after notes, but not held back for them.
    *
-   * Ordering is not enough on its own: each group is pushed independently, so a note whose own upload failed or
-   * conflicted in this pass would still be followed by its attachments, and the server answers a link for a
-   * note it has never heard of with 404. Holding the link until the note's own entries are gone keeps the two
-   * in step, and the next pass sends the note first.
+   * Holding a link until its note's own entries were gone looked safer and was worse: a note waiting on a
+   * conflict never clears, so its attachments were never linked at all — stuck forever behind work that
+   * could not finish. Ordering plus the client's own retry covers the real case instead: within a pass the
+   * note is pushed first, and a link that still arrives early is answered 404, which the client treats as
+   * "not yet" and retries rather than as a conflict.
    */
-  const pendingObjectIds = new Set(
-    [...groups.entries()]
-      .filter(([key]) => key.startsWith("note:"))
-      .map(([, items]) => items[0]!.objectId),
-  );
-  const pushableGroups = [...groups.entries()].filter(([key, items]) => {
-    if (!key.startsWith("note_attachment:")) {
-      return true;
-    }
-    const noteId = items[0]!.objectId;
-    // Its own entry is still queued (this one), so the note counts as pending only if another note entry is.
-    return !pendingObjectIds.has(noteId) || items.some((item) => item.operation === "create");
-  });
-
-  const orderedGroups = pushableGroups.sort(([left], [right]) => {
+  const orderedGroups = [...groups.entries()].sort(([left], [right]) => {
     const leftType = left.split(":")[0] ?? "";
     const rightType = right.split(":")[0] ?? "";
     const byType = (dependencyOrder[leftType] ?? 99) - (dependencyOrder[rightType] ?? 99);
@@ -341,6 +337,22 @@ export async function syncNow(deps: SyncDependencies): Promise<SyncOutcome> {
     orderedGroups.map(async ([key, items]) => {
       for (const item of items) {
         if (!isDue(item, startedAt)) {
+          continue;
+        }
+        if (
+          item.objectType === "note_attachment" &&
+          // Narrower than "wait for the note's entries": only a create that has not been acknowledged yet means
+          // the server has never heard of the note, which is the case that answers 404. A note waiting on a
+          // conflict holds an update, not a create, so it does not hold its attachments back.
+          (groups.get(`note:${item.objectId}`) ?? []).some((entry) => entry.operation === "create")
+        ) {
+          // Deferred, not failed: the note's create is being pushed in this same pass, so a short follow-up is
+          // enough. Without one the link waits for whatever unrelated trigger comes next, which is how a pasted
+          // image ends up linked only after the user happens to do something else.
+          const soon = now() + 1_000;
+          if (nextRetryAt === null || soon < nextRetryAt) {
+            nextRetryAt = soon;
+          }
           continue;
         }
         const outcome = await deps.push(item);
@@ -373,6 +385,10 @@ export async function syncNow(deps: SyncDependencies): Promise<SyncOutcome> {
         // A transient failure: keep the entry and schedule the next attempt.
         if (item.id !== undefined) {
           const attempts = item.attempts + 1;
+          const retryAt = now() + backoffDelayMs(attempts);
+          if (nextRetryAt === null || retryAt < nextRetryAt) {
+            nextRetryAt = retryAt;
+          }
           await recordSyncFailure(deps.db, item.id, now() + backoffDelayMs(attempts));
         }
         return { key, outcome: "retry" as const };
@@ -427,5 +443,5 @@ export async function syncNow(deps: SyncDependencies): Promise<SyncOutcome> {
     paused: allQueued.some(isPaused),
   });
 
-  return { pushed, pulled, conflicts, state, stoppedBy };
+  return { pushed, pulled, conflicts, state, stoppedBy, nextRetryAt };
 }

@@ -581,105 +581,6 @@ try {
   check("formulas render in place in the editor", inPlace.katex > 0, `${inPlace.katex}`);
   check("diagrams render in place in the editor", inPlace.diagrams > 0, `${inPlace.diagrams}`);
 
-  // 9b. Pasting and dropping an image (§12). This is the path a user actually takes and it had no end-to-end
-  // coverage at all: the rules were unit-tested, the wiring was not. The events are dispatched on the element
-  // the editor owns and they bubble like real ones, so an editor that swallowed them would fail here.
-  await page.getByRole("button", { name: "New note", exact: true }).first().click();
-  await page.waitForTimeout(3000);
-
-  const pasteAndDrop = await page.evaluate(async () => {
-    const base64 =
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let index = 0; index < binary.length; index += 1) {
-      bytes[index] = binary.charCodeAt(index);
-    }
-    const make = (name) => new File([bytes], name, { type: "image/png" });
-
-    const pasteTarget =
-      document.querySelector(".cm-content") ?? document.querySelector(".wysiwyg-editor");
-    if (!pasteTarget) {
-      return "no editor";
-    }
-    const pasteTransfer = new DataTransfer();
-    pasteTransfer.items.add(make("pasted.png"));
-    pasteTarget.dispatchEvent(
-      new ClipboardEvent("paste", {
-        clipboardData: pasteTransfer,
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
-
-    await new Promise((resolve) => setTimeout(resolve, 4000));
-
-    const dropTransfer = new DataTransfer();
-    dropTransfer.items.add(make("dropped.png"));
-    const host = document.querySelector(".editor-host") ?? pasteTarget;
-    host.dispatchEvent(
-      new DragEvent("dragover", { dataTransfer: dropTransfer, bubbles: true, cancelable: true }),
-    );
-    host.dispatchEvent(
-      new DragEvent("drop", { dataTransfer: dropTransfer, bubbles: true, cancelable: true }),
-    );
-    return "dispatched";
-  });
-
-  await page.waitForTimeout(8000);
-  const attachmentCalls = noteCalls.filter((call) => call.path.includes("/attachments"));
-  diagnostics.push(`ATTACHMENTS: ${pasteAndDrop} ${JSON.stringify(attachmentCalls)}`);
-  check(
-    "pasting and dropping an image upload it (§12)",
-    attachmentCalls.filter((call) => call.method === "POST" && call.status < 300).length >= 2,
-    JSON.stringify(attachmentCalls),
-  );
-
-  const listedAttachments = await page.evaluate(
-    () => document.querySelectorAll(".attachments li").length,
-  );
-  check(
-    "the images are listed as attachments (§12)",
-    listedAttachments >= 2,
-    `${listedAttachments}`,
-  );
-
-  // The queue is the honest witness that the links reached the server: §16 removes a queued change only on a
-  // server acknowledgement, and a rejected or still-blocked push leaves the entry behind.
-  const pasteNoteId = await page.evaluate(
-    () => document.querySelector(".editor-host")?.getAttribute("data-note-id") ?? null,
-  );
-  let queuedLinks = -1;
-  const linkDeadline = Date.now() + 40_000;
-  while (Date.now() < linkDeadline) {
-    queuedLinks = await page.evaluate(async (noteId) => {
-      const names = (await indexedDB.databases()).map((entry) => entry.name ?? "");
-      const name = names.find((candidate) => candidate.startsWith("securenotes")) ?? names[0];
-      const db = await new Promise((resolve, reject) => {
-        const request = indexedDB.open(name);
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-      });
-      const rows = await new Promise((resolve, reject) => {
-        const request = db.transaction("syncQueue").objectStore("syncQueue").getAll();
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-      });
-      return rows.filter((row) => row.objectType === "note_attachment" && row.objectId === noteId)
-        .length;
-    }, pasteNoteId);
-    if (queuedLinks === 0) {
-      break;
-    }
-    await page.waitForTimeout(1000);
-  }
-  diagnostics.push(`LINK QUEUE: ${queuedLinks} for ${pasteNoteId}`);
-  check(
-    "the server accepted the attachment links (§12)",
-    queuedLinks === 0,
-    `${queuedLinks} still queued`,
-  );
-
   // 10. Organisation (§9, §10): folders, tags, the filters built from them, and the server receiving them.
   await waitForQuiet(page);
   await page.getByLabel("New folder name").fill("Work");
@@ -778,6 +679,136 @@ try {
     "the note's tag link reached the server (§16)",
     onServer.links >= 1,
     JSON.stringify(onServer),
+  );
+
+  // 9b. Pasting and dropping an image (§12). This is the path a user actually takes and it had no end-to-end
+  // coverage at all: the rules were unit-tested, the wiring was not. The events are dispatched on the element
+  // the editor owns and they bubble like real ones, so an editor that swallowed them would fail here.
+  await page.getByRole("button", { name: "New note", exact: true }).first().click();
+  await page.waitForTimeout(3000);
+
+  const pasteAndDrop = await page.evaluate(async () => {
+    const base64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    const make = (name) => new File([bytes], name, { type: "image/png" });
+
+    const pasteTarget =
+      document.querySelector(".cm-content") ?? document.querySelector(".wysiwyg-editor");
+    if (!pasteTarget) {
+      return "no editor";
+    }
+    const pasteTransfer = new DataTransfer();
+    pasteTransfer.items.add(make("pasted.png"));
+    pasteTarget.dispatchEvent(
+      new ClipboardEvent("paste", {
+        clipboardData: pasteTransfer,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 4000));
+
+    const dropTransfer = new DataTransfer();
+    dropTransfer.items.add(make("dropped.png"));
+    const host = document.querySelector(".editor-host") ?? pasteTarget;
+    host.dispatchEvent(
+      new DragEvent("dragover", { dataTransfer: dropTransfer, bubbles: true, cancelable: true }),
+    );
+    host.dispatchEvent(
+      new DragEvent("drop", { dataTransfer: dropTransfer, bubbles: true, cancelable: true }),
+    );
+    return "dispatched";
+  });
+
+  await page.waitForTimeout(8000);
+  const attachmentCalls = noteCalls.filter((call) => call.path.includes("/attachments"));
+  diagnostics.push(`ATTACHMENTS: ${pasteAndDrop} ${JSON.stringify(attachmentCalls)}`);
+  check(
+    "pasting and dropping an image upload it (§12)",
+    attachmentCalls.filter((call) => call.method === "POST" && call.status < 300).length >= 2,
+    JSON.stringify(attachmentCalls),
+  );
+
+  const listedAttachments = await page.evaluate(
+    () => document.querySelectorAll(".attachments li").length,
+  );
+  check(
+    "the images are listed as attachments (§12)",
+    listedAttachments >= 2,
+    `${listedAttachments}`,
+  );
+
+  // The queue is the honest witness that the links reached the server: §16 removes a queued change only on a
+  // server acknowledgement, and a rejected or still-blocked push leaves the entry behind.
+  const pasteNoteId = await page.evaluate(
+    () => document.querySelector(".editor-host")?.getAttribute("data-note-id") ?? null,
+  );
+  let linkState = { mine: -1, all: [], noteOnServer: false };
+  const linkDeadline = Date.now() + 40_000;
+  while (Date.now() < linkDeadline) {
+    linkState = await page.evaluate(async (noteId) => {
+      const names = (await indexedDB.databases()).map((entry) => entry.name ?? "");
+      const name = names.find((candidate) => candidate.startsWith("securenotes")) ?? names[0];
+      const db = await new Promise((resolve, reject) => {
+        const request = indexedDB.open(name);
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      const rows = await new Promise((resolve, reject) => {
+        const request = db.transaction("syncQueue").objectStore("syncQueue").getAll();
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      const notes = await (
+        await fetch("/api/v1/notes", { credentials: "same-origin", cache: "no-store" })
+      ).json();
+      return {
+        mine: rows.filter((row) => row.objectType === "note_attachment" && row.objectId === noteId)
+          .length,
+        all: rows.map((row) => `${row.objectType}:${row.attempts}`),
+        noteOnServer: (notes.data?.notes ?? []).some((note) => note.id === noteId),
+      };
+    }, pasteNoteId);
+    if (linkState.mine === 0) {
+      break;
+    }
+    await page.waitForTimeout(1000);
+  }
+  diagnostics.push(`LINK STATE: ${JSON.stringify(linkState)} for ${pasteNoteId}`);
+  check(
+    "the server accepted the attachment links (§12)",
+    linkState.mine === 0,
+    JSON.stringify(linkState),
+  );
+
+  // The bytes have to be *displayed*. The endpoint serves ciphertext, so an <img> pointing at it shows a broken
+  // image — the markup would look right and the note would be full of empty boxes. The URL scheme and the
+  // decoded size are what distinguish a rendered picture from a broken one.
+  await page
+    .getByRole("button", { name: /preview/i })
+    .first()
+    .click();
+  await page.waitForTimeout(6000);
+  const shown = await page.evaluate(() =>
+    [...document.querySelectorAll(".preview img")].map((image) => ({
+      src: (image.getAttribute("src") ?? "").slice(0, 24),
+      width: image.naturalWidth,
+    })),
+  );
+  diagnostics.push(`SHOWN IMAGES: ${JSON.stringify(shown)}`);
+  check(
+    "the pasted image is displayed, decrypted (§12)",
+    shown.some((image) => image.src.startsWith("blob:") && image.width > 0),
+    JSON.stringify(shown),
+  );
+  diagnostics.push(
+    `ATT LOGS: ${JSON.stringify(appLogs.filter((line) => line.includes("[att]")).slice(-6))}`,
   );
 
   // 10. Replace the authenticator from the recovery session (§3), then sign in with the new one. The

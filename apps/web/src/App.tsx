@@ -65,6 +65,11 @@ import {
 } from "./editor/paste";
 import { uploadAttachment } from "./data/attachments-client";
 import {
+  attachmentIdsInHtml,
+  createAttachmentUrls,
+  rewriteAttachmentUrls,
+} from "./data/attachment-content";
+import {
   ATTACHMENT_URL_PREFIX,
   attachmentReferencesIn,
   attachmentRefsIn,
@@ -156,6 +161,8 @@ export function App() {
   const [selectedTagId, setSelectedTagId] = useState<string | null>(null);
   const [noteTagIds, setNoteTagIds] = useState<string[]>([]);
   const [tagLinks, setTagLinks] = useState<Map<string, string[]>>(new Map());
+  /** Blob URLs for the attachments a preview shows, and a version that changes when one becomes ready. */
+  const [attachmentVersion, setAttachmentVersion] = useState(0);
   const scheduler = useRef<SyncScheduler | null>(null);
   /** The references the note had when it was opened, for the save-time diff. */
   const [openedRefs, setOpenedRefs] = useState<string[]>([]);
@@ -220,6 +227,35 @@ export function App() {
     }
     setTagLinks(byNote);
   }, []);
+
+  /** Reads attachments for display. Ciphertext from the server, plaintext in a blob URL, never on disk. */
+  const attachmentUrls = useMemo(
+    () =>
+      account ? createAttachmentUrls({ dek: account.dek, keyVersion: account.keyVersion }) : null,
+    [account],
+  );
+
+  useEffect(() => {
+    // Object URLs pin their bytes until they are released, so they go with the key they were decrypted with.
+    return () => attachmentUrls?.dispose();
+  }, [attachmentUrls]);
+
+  /**
+   * Reads the attachments the open note refers to.
+   *
+   * The list comes from the note's own text, so this runs whenever the draft changes and reads only what is
+   * missing; the version bump is what re-renders the images once their bytes are decrypted.
+   */
+  useEffect(() => {
+    if (!attachmentUrls || !draft) {
+      return;
+    }
+    const ids = attachmentIdsInHtml(draft.body).filter((id) => attachmentUrls.get(id) === null);
+    if (ids.length === 0) {
+      return;
+    }
+    void attachmentUrls.load(ids).then(() => setAttachmentVersion((version) => version + 1));
+  }, [attachmentUrls, draft]);
 
   const refresh = useCallback(
     async (database: SecureNotesDatabase, unlocked: UnlockedAccount) => {
@@ -323,6 +359,13 @@ export function App() {
       // §16: an authentication failure waits for the user rather than retrying forever.
       setSyncState("auth-required");
       return;
+    }
+
+    if (outcome.nextRetryAt !== null) {
+      // The engine scheduled the next attempt; without a timer that schedule means nothing and the entry
+      // waits for the next unrelated trigger. Only the earliest one is armed, and a later pass replaces it.
+      const waitMs = Math.max(500, outcome.nextRetryAt - Date.now());
+      window.setTimeout(() => void scheduler.current?.syncNow(), waitMs);
     }
 
     if (outcome.pulled > 0) {
@@ -1137,7 +1180,14 @@ export function App() {
               onChange={(event) => setDraft({ ...draft, title: event.target.value })}
             />
             {preview ? (
-              <MarkdownPreview title={draft.title} body={draft.body} />
+              <MarkdownPreview
+                title={draft.title}
+                body={draft.body}
+                urlForAttachment={(id) => {
+                  void attachmentVersion;
+                  return attachmentUrls?.get(id) ?? null;
+                }}
+              />
             ) : (
               <div
                 className="editor-host"
@@ -1205,7 +1255,12 @@ export function App() {
                   {draftAttachments.map((attachment) => (
                     <li key={attachment.id}>
                       <a
-                        href={`${ATTACHMENT_URL_PREFIX}${attachment.id}/content`}
+                        // The endpoint serves ciphertext, so opening it hands the user an unreadable file: the
+                        // link points at the decrypted bytes once they have been read.
+                        href={
+                          attachmentUrls?.get(attachment.id) ??
+                          `${ATTACHMENT_URL_PREFIX}${attachment.id}/content`
+                        }
                         target="_blank"
                         rel="noreferrer"
                         title={attachment.id}
@@ -1562,7 +1617,16 @@ function LazyEditor({
  * `sanitizeHtml`. Nothing else in the app is inserted this way, and the sanitizer is
  * the reason this one is acceptable.
  */
-function MarkdownPreview({ title, body }: { title: string; body: string }) {
+function MarkdownPreview({
+  title,
+  body,
+  urlForAttachment,
+}: {
+  title: string;
+  body: string;
+  /** A displayable URL for an attachment, or null while it is still being read. */
+  urlForAttachment: (id: string) => string | null;
+}) {
   const container = useRef<HTMLDivElement>(null);
   const [html, setHtml] = useState<string | null>(null);
 
@@ -1601,7 +1665,15 @@ function MarkdownPreview({ title, body }: { title: string; body: string }) {
   if (html === null) {
     return <p className="muted">Rendering…</p>;
   }
-  return <div className="preview" ref={container} dangerouslySetInnerHTML={{ __html: html }} />;
+  // §12: the sanitizer ran inside `renderMarkdown`, so this HTML is safe. The attachment addresses are then
+  // replaced with blob URLs: the endpoint serves ciphertext, so an <img> pointing at it is a broken image.
+  return (
+    <div
+      className="preview"
+      ref={container}
+      dangerouslySetInnerHTML={{ __html: rewriteAttachmentUrls(html, urlForAttachment) }}
+    />
+  );
 }
 
 /**

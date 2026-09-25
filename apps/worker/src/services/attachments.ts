@@ -44,6 +44,23 @@ export function serializeAttachment(row: AttachmentRow) {
       ciphertext: row.name_ciphertext,
     },
     contentType: row.content_type,
+    /**
+     * The IV the content was encrypted with.
+     *
+     * It is not part of the content response, which returns bare ciphertext, so without this a device cannot
+     * assemble the envelope and the attachment's bytes can never be decrypted by anyone — which is what a note
+     * full of broken images looks like.
+     */
+    contentIv: row.content_iv,
+    /**
+     * The versions the content envelope was encrypted with.
+     *
+     * The row's columns, which the name envelope uses as well: both were written by the same client with the
+     * same key. They are named here rather than left inside `name` because assembling the content envelope
+     * needs them, and a client that guessed would fail to decrypt every attachment.
+     */
+    cryptoVersion: row.crypto_version,
+    keyVersion: row.key_version,
     sizeBytes: row.size_bytes,
     plaintextSizeBytes: row.plaintext_size_bytes,
     refCount: row.ref_count,
