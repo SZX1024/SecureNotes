@@ -95,6 +95,12 @@ const EMBED_ORIGINATED =
  */
 const EXPECTED_CONFLICT = /409 \(Conflict\)/;
 
+/**
+ * Preconditions this run provokes on purpose: a note can reach the server before the folder it was moved into, and
+ * the client retries. The 412 is the mechanism, not a fault.
+ */
+const EXPECTED_PRECONDITION = /412 \(Precondition Failed\)/;
+
 const browser = await chromium.launch({
   executablePath: "/usr/bin/google-chrome",
   headless: true,
@@ -920,6 +926,97 @@ print(json.dumps({"names": names, "format": manifest["format"], "version": manif
       JSON.stringify(report.names.filter((name) => name.startsWith("attachments/"))),
     );
 
+    // 9d. Import (§20): the archive that was just written, read back through the interface. A round trip is the
+    // only thing that proves the two halves agree — and the duplicates in it are exactly the case §20 says the
+    // user has to decide.
+    // Counted in the database rather than in the list: a filter left over from an earlier step would hide the
+    // very notes this assertion is about, and filtering is covered by its own checks.
+    const storedNoteCount = async () =>
+      page.evaluate(async () => {
+        const names = (await indexedDB.databases()).map((entry) => entry.name ?? "");
+        const name = names.find((candidate) => candidate.startsWith("securenotes")) ?? names[0];
+        const db = await new Promise((resolve, reject) => {
+          const request = indexedDB.open(name);
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+        return new Promise((resolve, reject) => {
+          const request = db.transaction("notes").objectStore("notes").count();
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+      });
+
+    const notesBeforeImport = await storedNoteCount();
+    await page.setInputFiles('input[type="file"][aria-label="Import an archive"]', downloaded);
+    await page.waitForSelector('[aria-label="Import an archive"][role="dialog"]', {
+      timeout: 20_000,
+    });
+    const prompt = await page.evaluate(
+      () =>
+        document.querySelector('[role="dialog"][aria-label="Import an archive"]')?.textContent ??
+        "",
+    );
+    diagnostics.push(`IMPORT PROMPT: ${prompt.slice(0, 120)}`);
+    check(
+      "duplicate ids are put to the user (§20)",
+      /already exist here/i.test(prompt),
+      prompt.slice(0, 120),
+    );
+
+    await page.getByRole("button", { name: "Import as copies", exact: true }).click();
+    await page.waitForTimeout(6000);
+    diagnostics.push(
+      `IMPORT AFTER COPIES: ${JSON.stringify(
+        await page.evaluate(async () => {
+          const names = (await indexedDB.databases()).map((entry) => entry.name ?? "");
+          const name = names.find((candidate) => candidate.startsWith("securenotes")) ?? names[0];
+          const db = await new Promise((resolve, reject) => {
+            const request = indexedDB.open(name);
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+          });
+          const notes = await new Promise((resolve, reject) => {
+            const request = db.transaction("notes").objectStore("notes").getAll();
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+          });
+          return {
+            dialogOpen: Boolean(
+              document.querySelector('[role="dialog"][aria-label="Import an archive"]'),
+            ),
+            listed: document.querySelectorAll(".note-list button").length,
+            storedNotes: notes.length,
+            created: notes.map((note) => note.createdAt),
+            message: document.querySelector(".message, .notice, .status")?.textContent ?? null,
+          };
+        }),
+      )}`,
+    );
+    const notesAfterCopies = await storedNoteCount();
+    check(
+      "importing as copies adds the archive's notes (§20)",
+      notesAfterCopies > notesBeforeImport,
+      `${notesBeforeImport} -> ${notesAfterCopies}`,
+    );
+
+    // And again, merging this time: everything in the archive is already here and unchanged, so a merge is a
+    // no-op rather than an overwrite.
+    await page.setInputFiles('input[type="file"][aria-label="Import an archive"]', downloaded);
+    await page.waitForSelector('[role="dialog"][aria-label="Import an archive"]', {
+      timeout: 20_000,
+    });
+    await page.getByRole("button", { name: "Merge", exact: true }).click();
+    await page.waitForTimeout(6000);
+    const notesAfterMerge = await storedNoteCount();
+    check(
+      "merging an archive that is already here changes nothing (§20)",
+      notesAfterMerge === notesAfterCopies,
+      `${notesAfterCopies} -> ${notesAfterMerge}`,
+    );
+    const importMessage = await page.evaluate(() => document.body.innerText);
+    check("the import reports what it did", /Imported \d+ new item/.test(importMessage), "");
+
     // §20: the reminder is measured from the export that just happened.
     await page.waitForTimeout(2000);
     const reminderAfter = await page.evaluate(
@@ -970,7 +1067,10 @@ print(json.dumps({"names": names, "format": manifest["format"], "version": manif
   // 11. The app's own errors.
   const ownPageErrors = pageErrors.filter((message) => !EMBED_ORIGINATED.test(message));
   const ownConsoleErrors = consoleErrors.filter(
-    (message) => !EMBED_ORIGINATED.test(message) && !EXPECTED_CONFLICT.test(message),
+    (message) =>
+      !EMBED_ORIGINATED.test(message) &&
+      !EXPECTED_CONFLICT.test(message) &&
+      !EXPECTED_PRECONDITION.test(message),
   );
   check(
     "no uncaught errors in the app",

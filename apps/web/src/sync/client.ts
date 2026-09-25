@@ -145,10 +145,20 @@ export async function pushChange(
       // The note's tag set is uploaded as a whole: the server replaces it, so this is idempotent and a retry
       // cannot double-apply a link (§16: set semantics where they are safe).
       const links = await db.noteTags.where("noteId").equals(change.objectId).toArray();
-      await apiRequest(`/notes/${change.objectId}/tags`, {
-        method: "PUT",
-        body: { tagIds: links.map((link) => link.tagId) },
-      });
+      try {
+        await apiRequest(`/notes/${change.objectId}/tags`, {
+          method: "PUT",
+          body: { tagIds: links.map((link) => link.tagId) },
+        });
+      } catch (error) {
+        // A 404 means the note is not on the server yet, not that anything is wrong — an imported copy's tags can
+        // be pushed before its note. Retrying is the answer; pausing the note as a conflict would ask the user to
+        // resolve a conflict the server never recorded.
+        if (error instanceof ApiError && error.status === 404) {
+          throw new ApiError("PRECONDITION_FAILED", 412, "the note is not on the server yet");
+        }
+        throw error;
+      }
       return "ok";
     }
 

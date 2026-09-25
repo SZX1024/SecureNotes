@@ -1446,7 +1446,6 @@ ok  the image is displayed in the visual editor (§12)        WYSIWYG：blob URL
 另外记录：模式切换按钮的标签是「**要切换到**的那个模式」，退出预览的按钮叫 **Edit**，
 而 `preview` 是**独立于模式**的状态（切模式不会退出预览）。我的测试最初就是在这两点上判断错的。
 
-
 ## 33. P8（第 1 批）：归档格式与导出
 
 ### 33.1 需求（§20）
@@ -1457,12 +1456,12 @@ ok  the image is displayed in the visual editor (§12)        WYSIWYG：blob URL
 
 ### 33.2 交付
 
-| 文件 | 内容 |
-| --- | --- |
-| `src/export/zip.ts` | **自写 ZIP 读写**（不新增依赖）：CRC-32（表驱动）、DOS 时间、本地头/中央目录/EOCD；压缩用平台 `CompressionStream("deflate-raw")`，**不可用时退回 store**（两者都是合法 ZIP） |
+| 文件                    | 内容                                                                                                                                                                                                                                                        |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/export/zip.ts`     | **自写 ZIP 读写**（不新增依赖）：CRC-32（表驱动）、DOS 时间、本地头/中央目录/EOCD；压缩用平台 `CompressionStream("deflate-raw")`，**不可用时退回 store**（两者都是合法 ZIP）                                                                                |
 | `src/export/archive.ts` | 归档结构：`manifest.json`（含 `encryption: "none"`）、`notes.json`、`folders.json`、`tags.json`、`attachments.json`、`notes/<id>.md`、`attachments/<id>/<文件名>`，外加 `README.txt` **向人解释结构**；解析与**校验**（格式、版本、悬空引用）**完全不写库** |
-| `src/export/collect.ts` | 从本地库收集（**排除回收站**）、附件集合（取自笔记正文）、提醒判断与文件名 |
-| `App.tsx` | 「Export everything」按钮 + 下载 + 记录 `lastExportAt` + **30 天提醒** |
+| `src/export/collect.ts` | 从本地库收集（**排除回收站**）、附件集合（取自笔记正文）、提醒判断与文件名                                                                                                                                                                                  |
+| `App.tsx`               | 「Export everything」按钮 + 下载 + 记录 `lastExportAt` + **30 天提醒**                                                                                                                                                                                      |
 
 **两个刻意的设计决定**：
 
@@ -1490,3 +1489,46 @@ ok  the reminder clears after an export (§20)
 
 **导入**：ZIP 解析（已有）→ 事务性提交（Dexie 单事务；失败回滚）、重复 id 的**合并/重映射**选择、导入后入队同步；
 随后是**恢复包**（独立、版本化、不含明文 TOTP）。
+
+
+## 34. P8（第 2 批）：导入（事务性 + 用户决定重复项）
+
+### 34.1 交付
+
+| 文件 | 内容 |
+| --- | --- |
+| `src/export/import.ts` | **计划**（纯函数：合并 / 重映射）+ **提交**（单事务） |
+| `src/local/aad.ts` | 把 AAD 约定抽成**一处声明**（原先是 repository 的私有函数；现在三个模块要用同一套，安全相关的细节不该复制三份） |
+| `App.tsx` | Import… 文件输入 → 解析校验 → **冲突询问**（Merge / Import as copies / Cancel）→ 报告 |
+
+**规则（都写进了代码注释）**：
+- **合并**：笔记取 `updatedAt` 较新的一侧；标签取**并集**；本地更新则**完全不动**（`unchanged`）；文件夹/标签合并时**保留本地**（那是用户当前的名字）。
+- **重映射**：每一个冲突对象拿到**新 id**，并把**引用一起改写**（笔记的文件夹、标签、附件的来源笔记）。
+- 合并替换文本时按**新修订重新加密**并入队 `update`（`baseRevision` = 旧修订）——修订在 AAD 里，这一步错了就是静默解不开。
+
+### 34.2 测试逼出来的一个真实严重缺陷
+
+**`PrematureCommitError`：Dexie 事务不能跨越非 Dexie 的 `await`。** 我最初把 WebCrypto 加密写在事务**内**，
+于是 Dexie **提前提交**——也就是说，**导入根本不是事务性的**，正是 §20 唯一明令排除的行为。
+现在：**先做完所有加密与上传，事务里只剩数据库写入**。
+
+**P8 验收标准「事务性导入回滚测试通过」已达成**：注入一个「第二次笔记写入抛错」的数据库，
+断言导入后 **0 条笔记、0 条链接、0 条队列项**（事务把三样都回滚了）✓；另有「附件上传失败则不写任何东西」✓。
+
+顺带修掉导入暴露的同步缺陷：**标签链接也会先于笔记到达服务端**（`PUT /notes/:id/tags -> 404`），
+而 404 被当成冲突 → 又制造服务端从未记录的冲突。现在标签链接与附件链接一样：**等笔记的 create 确认**，
+且 404 视为**可重试**。
+
+### 34.3 验证（E2E 72 项）
+
+```text
+ok  duplicate ids are put to the user (§20)            "4 item(s) … already exist here. Merge … / as copies …"
+ok  importing as copies adds the archive's notes (§20) 2 -> 4
+ok  merging an archive that is already here changes nothing (§20) 4 -> 4
+```
+
+`pnpm check` ✅ **601 测试**（31 + 346 + 224）。
+
+### 34.4 下一批
+
+**恢复包**（§20）：独立于普通导出、**版本化**、**不含明文 TOTP 密钥**，只含恢复所需的最小受保护密钥/恢复元数据。

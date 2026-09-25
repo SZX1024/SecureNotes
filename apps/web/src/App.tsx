@@ -31,7 +31,7 @@ import { openAppDatabase } from "./local/migrations";
 import { KeyStore } from "./local/key-store";
 import type { SecureNotesDatabase } from "./local/schema";
 import { NoteSearchIndex, highlightSegments } from "./search";
-import { MAX_TAGS_PER_NOTE } from "@securenotes/shared";
+import { MAX_TAGS_PER_NOTE, type Bytes } from "@securenotes/shared";
 
 import {
   createLocalFolder,
@@ -70,7 +70,13 @@ import {
   fetchAttachment,
   rewriteAttachmentUrls,
 } from "./data/attachment-content";
-import { buildExportArchive } from "./export/archive";
+import {
+  buildExportArchive,
+  findCollisions,
+  parseExportArchive,
+  type ExportArchive,
+} from "./export/archive";
+import { applyImport, planImport, type ImportChoice } from "./export/import";
 import {
   LAST_EXPORT_KEY,
   collectExportSources,
@@ -175,6 +181,12 @@ export function App() {
   /** The reminder's text, decided when the clock is read rather than while rendering. */
   const [exportReminder, setExportReminder] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  /** An archive that has been read and validated, waiting for the user to decide about duplicates (§20). */
+  const [importPrompt, setImportPrompt] = useState<{
+    archive: ExportArchive;
+    collisions: number;
+  } | null>(null);
+  const [importing, setImporting] = useState(false);
   const scheduler = useRef<SyncScheduler | null>(null);
   /** The references the note had when it was opened, for the save-time diff. */
   const [openedRefs, setOpenedRefs] = useState<string[]>([]);
@@ -562,6 +574,101 @@ export function App() {
       setExporting(false);
     }
   }, [db, account]);
+
+  /**
+   * Reads an archive and, if ids collide, asks what to do with them (§20).
+   *
+   * Nothing is written here: §20 wants the choice, and an archive that cannot be parsed is rejected with its
+   * reason rather than half-applied.
+   */
+  const chooseImport = useCallback(
+    async (file: File) => {
+      if (!db) {
+        return;
+      }
+      try {
+        const archive = await parseExportArchive(new Uint8Array(await file.arrayBuffer()) as Bytes);
+        const collisions = findCollisions(archive, {
+          noteIds: (await db.notes.toArray()).map((note) => note.id),
+          folderIds: (await db.folders.toArray()).map((folder) => folder.id),
+          tagIds: (await db.tags.toArray()).map((tag) => tag.id),
+          attachmentIds: (await db.attachments.toArray()).map((attachment) => attachment.id),
+        });
+        const total =
+          collisions.notes.length +
+          collisions.folders.length +
+          collisions.tags.length +
+          collisions.attachments.length;
+        setImportPrompt({ archive, collisions: total });
+      } catch (error) {
+        setMessage(error instanceof Error ? error.message : "The archive could not be read.");
+      }
+    },
+    [db],
+  );
+
+  /** Applies the archive with the choice the user made. */
+  const runImport = useCallback(
+    async (choice: ImportChoice) => {
+      if (!db || !account || !importPrompt) {
+        return;
+      }
+      setImporting(true);
+      try {
+        const localNotes = await db.notes.toArray();
+        const plan = planImport({
+          archive: importPrompt.archive,
+          existing: {
+            noteIds: localNotes.map((note) => note.id),
+            folderIds: (await db.folders.toArray()).map((folder) => folder.id),
+            tagIds: (await db.tags.toArray()).map((tag) => tag.id),
+          },
+          existingNotes: await Promise.all(
+            localNotes.map(async (note) => ({
+              id: note.id,
+              updatedAt: note.updatedAt,
+              tagIds: (await db.noteTags.where("noteId").equals(note.id).toArray()).map(
+                (link) => link.tagId,
+              ),
+            })),
+          ),
+          choice,
+          newId: () => crypto.randomUUID(),
+        });
+
+        const report = await applyImport({
+          db,
+          dek: account.dek,
+          keyVersion: account.keyVersion,
+          plan,
+          now: Date.now(),
+          uploadAttachment: async (attachment) => {
+            const uploaded = await uploadAttachment({
+              file: new File([attachment.bytes as BlobPart], attachment.filename, {
+                type: attachment.contentType,
+              }),
+              dek: account.dek,
+              keyVersion: account.keyVersion,
+              attachmentId: crypto.randomUUID(),
+            });
+            return uploaded.id;
+          },
+        });
+
+        setImportPrompt(null);
+        setMessage(
+          `Imported ${report.created} new item(s), merged ${report.merged}, copied ${report.remapped}, ${report.attachments} attachment(s).`,
+        );
+        await refresh(db, account);
+        scheduler.current?.scheduleAfterIdle();
+      } catch (error) {
+        setMessage(error instanceof Error ? error.message : "The import failed.");
+      } finally {
+        setImporting(false);
+      }
+    },
+    [db, account, importPrompt, refresh],
+  );
 
   /** The CRUD behind the folder tree and the tag list (§9, §10). */
   const organisationActions = useMemo(() => {
@@ -1156,6 +1263,22 @@ export function App() {
             >
               {exporting ? "Exporting…" : "Export everything"}
             </button>
+            <label className="file-input">
+              <span>Import…</span>
+              <input
+                type="file"
+                accept=".zip,application/zip"
+                aria-label="Import an archive"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  // Cleared so choosing the same file twice in a row still fires.
+                  event.target.value = "";
+                  if (file) {
+                    void chooseImport(file);
+                  }
+                }}
+              />
+            </label>
             {exportReminder !== null && (
               <p className="muted" data-testid="export-reminder">
                 {exportReminder}
@@ -1436,6 +1559,31 @@ export function App() {
           }}
           onLater={() => setMustRebind(false)}
         />
+      )}
+
+      {importPrompt && (
+        <div className="palette conflict-panel" role="dialog" aria-label="Import an archive">
+          <h2>Import an archive</h2>
+          <p className="muted">
+            {importPrompt.collisions === 0
+              ? `${importPrompt.archive.notes.length} note(s) will be added. Nothing here has the same id.`
+              : `${importPrompt.collisions} item(s) in this archive already exist here. Merge keeps the newer text and adds tags; importing as copies gives everything in the archive new ids and leaves what is here untouched.`}
+          </p>
+          <button
+            type="button"
+            className="primary"
+            disabled={importing}
+            onClick={() => void runImport("merge")}
+          >
+            Merge
+          </button>
+          <button type="button" disabled={importing} onClick={() => void runImport("remap")}>
+            Import as copies
+          </button>
+          <button type="button" disabled={importing} onClick={() => setImportPrompt(null)}>
+            Cancel
+          </button>
+        </div>
       )}
 
       {resolvingConflict && account && (

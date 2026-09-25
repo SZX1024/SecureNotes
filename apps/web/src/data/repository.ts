@@ -1,5 +1,6 @@
 import { decryptObject, encryptObject, utf8 } from "@securenotes/shared";
 
+import { aadFor } from "../local/aad";
 import { enqueueChange } from "../local/sync-queue";
 import type {
   LocalFolder,
@@ -30,15 +31,6 @@ export interface LocalContext {
   dek: CryptoKey;
   userId: string;
   keyVersion: number;
-}
-
-function aadFor(
-  objectType: "note" | "folder" | "tag",
-  objectId: string,
-  revision: number,
-  keyVersion: number,
-) {
-  return { objectType, objectId, revision, keyVersion } as const;
 }
 
 export interface StoredNote {

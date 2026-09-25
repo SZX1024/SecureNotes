@@ -340,10 +340,11 @@ export async function syncNow(deps: SyncDependencies): Promise<SyncOutcome> {
           continue;
         }
         if (
-          item.objectType === "note_attachment" &&
+          (item.objectType === "note_attachment" || item.objectType === "note_tag_link") &&
           // Narrower than "wait for the note's entries": only a create that has not been acknowledged yet means
           // the server has never heard of the note, which is the case that answers 404. A note waiting on a
-          // conflict holds an update, not a create, so it does not hold its attachments back.
+          // conflict holds an update, not a create, so it does not hold its links back. Both kinds of link are
+          // here because both are addressed to the note: its attachments and its tags.
           (groups.get(`note:${item.objectId}`) ?? []).some((entry) => entry.operation === "create")
         ) {
           // Deferred, not failed: the note's create is being pushed in this same pass, so a short follow-up is
