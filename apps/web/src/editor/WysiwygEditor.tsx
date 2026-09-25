@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { inlineRenderPlugin } from "./inline-render";
 import { missingTitleFix } from "./missing-titles";
+import { attachmentIdFromUrl } from "../data/attachment-content";
 
 /**
  * WYSIWYG mode (§12).
@@ -27,9 +28,26 @@ export interface WysiwygEditorProps {
   value: string;
   onChange: (markdown: string) => void;
   ariaLabel?: string;
+  /**
+   * A displayable URL for an attachment, or null while it is being read.
+   *
+   * The editor renders `<img>` nodes straight from the Markdown, and the address in the Markdown points at the
+   * content endpoint, which serves ciphertext — so without this every image in the visual editor is a broken
+   * picture. Only the *view* is rewritten: the document keeps the canonical address, which is what makes
+   * saving and syncing unaffected.
+   */
+  urlForAttachment?: (attachmentId: string) => string | null;
+  /** Changes when a new URL becomes available, so the view can be refreshed. */
+  attachmentVersion?: number;
 }
 
-export function WysiwygEditor({ value, onChange, ariaLabel }: WysiwygEditorProps) {
+export function WysiwygEditor({
+  value,
+  onChange,
+  ariaLabel,
+  urlForAttachment,
+  attachmentVersion,
+}: WysiwygEditorProps) {
   const host = useRef<HTMLDivElement>(null);
   const [failure, setFailure] = useState<string | null>(null);
 
@@ -39,6 +57,56 @@ export function WysiwygEditor({ value, onChange, ariaLabel }: WysiwygEditorProps
   useEffect(() => {
     onChangeRef.current = onChange;
   }, [onChange]);
+
+  /**
+   * Shows attachments as the pictures they are.
+   *
+   * ProseMirror renders the image node from the Markdown, and the Markdown points at the content endpoint,
+   * which answers with ciphertext: the image cannot load, so it shows as a broken picture. The fix is at the
+   * view level — the `<img>` in the DOM gets the decrypted blob URL while the document keeps the canonical
+   * address — because the document is what gets saved and synced, and rewriting it would put blob URLs into
+   * the note's text, where they mean nothing to any other device.
+   *
+   * A mutation observer is used rather than a one-off pass: ProseMirror replaces nodes as it re-renders, so a
+   * rewritten image becomes a fresh, un-rewritten one the next time the paragraph is touched.
+   */
+  useEffect(() => {
+    const element = host.current;
+    if (!element || !urlForAttachment) {
+      return;
+    }
+
+    let frame = 0;
+    const apply = () => {
+      for (const image of element.querySelectorAll<HTMLImageElement>("img[src]")) {
+        const id = attachmentIdFromUrl(image.getAttribute("src") ?? "");
+        if (id === null) {
+          continue;
+        }
+        const resolved = urlForAttachment(id);
+        if (resolved !== null && image.getAttribute("src") !== resolved) {
+          image.setAttribute("src", resolved);
+        }
+      }
+    };
+
+    const observer = new MutationObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(apply);
+    });
+    observer.observe(element, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["src"],
+    });
+    apply();
+
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(frame);
+    };
+  }, [urlForAttachment, attachmentVersion]);
 
   useEffect(() => {
     const element = host.current;

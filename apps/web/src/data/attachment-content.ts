@@ -33,6 +33,13 @@ export function attachmentIdsInHtml(html: string): string[] {
   return [...found];
 }
 
+/** The attachment id an address points at, or null when it is not an attachment address. */
+export function attachmentIdFromUrl(url: string): string | null {
+  // Not the shared global pattern: a single lookup must not depend on, or leave behind, lastIndex state.
+  const match = new RegExp(`^${ATTACHMENT_URL_PREFIX}([0-9a-fA-F-]{36})/content$`).exec(url);
+  return match ? match[1]! : null;
+}
+
 /**
  * Replaces attachment URLs with displayable ones.
  *

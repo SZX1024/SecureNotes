@@ -1378,7 +1378,6 @@ E2E 一直只验证「笔记里**已有**的图片能渲染」，**从未**验�
   原因已定位到方向：链接**按设计等待笔记自身条目确认**，而该笔记条目在测试窗口内没有清空
   （需要继续查明是笔记推送被阻塞还是压缩/顺序问题）。**我不把这条断言标绿。**
 
-
 ## 31. 「图片无法正常加载」：三个真实缺陷
 
 ### 31.1 缺陷一：根本没有「解密后显示」这一步
@@ -1421,3 +1420,29 @@ ok  the server accepted the attachment links (§12)         队列排空，服�
 
 诊断信息依旧只在失败时打印；本轮正是靠 `[att] failed … crypto_version must be a positive integer`
 与 `LINK STATE: {…, "attempts":[1,0]}` 这两条记录定位到真因的。
+
+
+## 32. WYSIWYG 里的图片（同一条根因的第二处渲染路径）
+
+§31 修好的是**预览**。WYSIWYG 走的是**另一条管线**：Milkdown / ProseMirror 按 Markdown 里的地址自己渲染 `<img>`，
+而那个地址指向内容接口，返回的是**密文** —— 所以在视觉编辑器里图片**必然是裂图**。
+
+修：`WysiwygEditor` 接受 `urlForAttachment`，用 `MutationObserver` 把视图中的 `img[src]` 换成解密后的 blob URL。
+
+**关键取舍（值得写下来）**：只改**视图**，不改**文档**。文档里的地址仍是规范地址 —— 它是要被保存与同步的内容，
+若把 blob URL 写进去，别的设备上毫无意义，而且会在保存时把本地临时地址固化进笔记。
+
+用观察器而不是一次性遍历，是因为 ProseMirror 会按需替换节点：改写过的图片在段落被再次渲染时会变回未改写的那一个。
+
+`attachmentIdFromUrl` 单独成函数并加测试：**不能**复用带 `g` 标志的共享正则，
+否则连续取值会因 `lastIndex` 而跳着匹配。
+
+### 验证（E2E 60 项）
+
+```text
+ok  the pasted image is displayed, decrypted (§12)           预览：blob URL，naturalWidth = 1
+ok  the image is displayed in the visual editor (§12)        WYSIWYG：blob URL，naturalWidth = 1
+```
+
+另外记录：模式切换按钮的标签是「**要切换到**的那个模式」，退出预览的按钮叫 **Edit**，
+而 `preview` 是**独立于模式**的状态（切模式不会退出预览）。我的测试最初就是在这两点上判断错的。

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchAttachment } from "./attachment-content";
 import {
   ATTACHMENT_CONTENT_PATTERN,
+  attachmentIdFromUrl,
   attachmentIdsInHtml,
   createAttachmentUrls,
   rewriteAttachmentUrls,
@@ -204,5 +205,25 @@ describe("assembling the envelope", () => {
     // envelope cannot be assembled and every attachment is unreadable.
     await expect(fetchAttachment(dek, 1, ID)).resolves.toEqual({ bytes, contentType: "image/png" });
     vi.unstubAllGlobals();
+  });
+});
+
+describe("reading an address", () => {
+  it("extracts the id from an attachment address", () => {
+    expect(attachmentIdFromUrl(`/api/v1/attachments/${ID}/content`)).toBe(ID);
+  });
+
+  it("reports nothing for anything else", () => {
+    // The visual editor hands every image's address here, including ones that are not attachments.
+    expect(attachmentIdFromUrl("https://example.com/a.png")).toBeNull();
+    expect(attachmentIdFromUrl(`/api/v1/attachments/${ID}`)).toBeNull();
+    expect(attachmentIdFromUrl("blob:http://localhost/abc")).toBeNull();
+  });
+
+  it("does not depend on, or leave behind, pattern state", () => {
+    // A global pattern reused here would skip every other call.
+    expect(attachmentIdFromUrl(`/api/v1/attachments/${ID}/content`)).toBe(ID);
+    expect(attachmentIdFromUrl(`/api/v1/attachments/${ID}/content`)).toBe(ID);
+    expect(ATTACHMENT_CONTENT_PATTERN.lastIndex).toBe(0);
   });
 });

@@ -807,6 +807,54 @@ try {
     shown.some((image) => image.src.startsWith("blob:") && image.width > 0),
     JSON.stringify(shown),
   );
+
+  // And the visual editor, which renders the images itself from the Markdown: those addresses point at the
+  // content endpoint too, so it needed its own fix and its own check.
+  // Preview and the editor mode are separate toggles: switching the mode does not leave the preview, so the
+  // preview is left first. Both are found by their own state rather than by assuming where the interface is.
+  await page.evaluate(() => {
+    if (document.querySelector(".preview")) {
+      for (const button of document.querySelectorAll("button")) {
+        if (button.textContent?.trim() === "Edit") {
+          button.click();
+          break;
+        }
+      }
+    }
+  });
+  await page.waitForTimeout(1500);
+  await page.evaluate(() => {
+    const button = [...document.querySelectorAll("button")].find(
+      (candidate) => candidate.textContent?.trim() === "WYSIWYG",
+    );
+    button?.click();
+  });
+  await page.waitForTimeout(7000);
+  const inEditor = await page.evaluate(() => {
+    const host = document.querySelector(".editor-host");
+    return [...(host?.querySelectorAll("img") ?? [])].map((image) => ({
+      src: (image.getAttribute("src") ?? "").slice(0, 24),
+      width: image.naturalWidth,
+    }));
+  });
+  const editorState = await page.evaluate(() => ({
+    host: Boolean(document.querySelector(".editor-host")),
+    contentEditable: Boolean(document.querySelector('[contenteditable="true"]')),
+    source: Boolean(document.querySelector(".cm-content")),
+    preview: Boolean(document.querySelector(".preview")),
+    buttons: [...document.querySelectorAll("button")]
+      .map((button) => button.textContent?.trim() ?? "")
+      .filter((label) => /WYSIWYG|Markdown source|Preview|Edit/.test(label)),
+    totalImages: document.querySelectorAll("img").length,
+  }));
+  diagnostics.push(
+    `WYSIWYG IMAGES: ${JSON.stringify(inEditor)} STATE: ${JSON.stringify(editorState)}`,
+  );
+  check(
+    "the image is displayed in the visual editor (§12)",
+    inEditor.some((image) => image.src.startsWith("blob:") && image.width > 0),
+    JSON.stringify(inEditor),
+  );
   diagnostics.push(
     `ATT LOGS: ${JSON.stringify(appLogs.filter((line) => line.includes("[att]")).slice(-6))}`,
   );

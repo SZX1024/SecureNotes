@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 
 import { ApiError, apiRequest } from "./api/client";
 import { applyRemote } from "./sync/apply";
@@ -82,8 +82,6 @@ import {
   saveThemePreference,
   type ThemePreference,
 } from "./theme";
-import type { MarkdownSourceEditor as MarkdownSourceEditorType } from "./editor/MarkdownSourceEditor";
-import type { WysiwygEditor as WysiwygEditorType } from "./editor/WysiwygEditor";
 import {
   buildCommands,
   filterCommands,
@@ -1199,6 +1197,11 @@ export function App() {
                 <LazyEditor
                   key={draft.id}
                   mode={editorMode}
+                  urlForAttachment={(id) => {
+                    void attachmentVersion;
+                    return attachmentUrls?.get(id) ?? null;
+                  }}
+                  attachmentVersion={attachmentVersion}
                   value={draft.body}
                   onChange={(body) =>
                     setDraft((current) => (current ? { ...current, body } : current))
@@ -1581,21 +1584,33 @@ function LazyEditor({
   mode,
   value,
   onChange,
+  urlForAttachment,
+  attachmentVersion,
 }: {
   mode: EditorMode;
   value: string;
   onChange: (value: string) => void;
+  urlForAttachment?: (attachmentId: string) => string | null;
+  attachmentVersion?: number;
 }) {
-  const [Component, setComponent] = useState<
-    typeof MarkdownSourceEditorType | typeof WysiwygEditorType | null
-  >(null);
+  type EditorComponent = ComponentType<{
+    value: string;
+    onChange: (value: string) => void;
+    /** Only the visual editor uses these; the source editor shows the Markdown as text. */
+    urlForAttachment?: (attachmentId: string) => string | null;
+    attachmentVersion?: number;
+  }>;
+
+  // One component type rather than a union: the two editors take the same required props, and the visual one
+  // uses two optional extras that the source editor simply never reads.
+  const [Component, setComponent] = useState<EditorComponent | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     const load = mode === "wysiwyg" ? loadWysiwygEditor : loadSourceEditor;
     void load().then((loaded) => {
       if (!cancelled) {
-        setComponent(() => loaded);
+        setComponent(() => loaded as EditorComponent);
       }
     });
     return () => {
@@ -1606,7 +1621,14 @@ function LazyEditor({
   if (!Component) {
     return <p className="muted">Loading the editor…</p>;
   }
-  return <Component value={value} onChange={onChange} />;
+  return (
+    <Component
+      value={value}
+      onChange={onChange}
+      {...(urlForAttachment === undefined ? {} : { urlForAttachment })}
+      {...(attachmentVersion === undefined ? {} : { attachmentVersion })}
+    />
+  );
 }
 
 /**
