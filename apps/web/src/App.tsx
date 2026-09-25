@@ -6,6 +6,7 @@ import { hasSessionCookie, isOnline, pullChanges, pushChange } from "./sync/clie
 import { loadNoteConflict, resolveNoteConflict } from "./sync/conflicts-client";
 import { threeWayMerge } from "./sync/merge";
 import type { ConflictSides } from "./sync/conflicts-client";
+import { enqueueChange } from "./local/sync-queue";
 import { listLocalConflicts, syncNow, type SyncState } from "./sync/engine";
 import { SyncScheduler, attachSyncTriggers } from "./sync/scheduler";
 import {
@@ -31,7 +32,7 @@ import { openAppDatabase } from "./local/migrations";
 import { KeyStore } from "./local/key-store";
 import type { SecureNotesDatabase } from "./local/schema";
 import { NoteSearchIndex, highlightSegments } from "./search";
-import { MAX_TAGS_PER_NOTE, type Bytes } from "@securenotes/shared";
+import { MAX_ATTACHMENT_BYTES, MAX_TAGS_PER_NOTE, type Bytes } from "@securenotes/shared";
 
 import {
   createLocalFolder,
@@ -63,7 +64,11 @@ import {
   loadRichTextPreference,
   saveRichTextPreference,
 } from "./editor/paste";
-import { uploadAttachment } from "./data/attachments-client";
+import {
+  encryptAttachmentBytes,
+  encryptAttachmentName,
+  uploadAttachment,
+} from "./data/attachments-client";
 import {
   attachmentIdsInHtml,
   createAttachmentUrls,
@@ -92,6 +97,7 @@ import {
 } from "./export/collect";
 import {
   ATTACHMENT_URL_PREFIX,
+  attachmentMarkdown,
   attachmentReferencesIn,
   attachmentRefsIn,
   diffAttachmentRefs,
@@ -262,8 +268,26 @@ export function App() {
   /** Reads attachments for display. Ciphertext from the server, plaintext in a blob URL, never on disk. */
   const attachmentUrls = useMemo(
     () =>
-      account ? createAttachmentUrls({ dek: account.dek, keyVersion: account.keyVersion }) : null,
-    [account],
+      account
+        ? createAttachmentUrls({
+            dek: account.dek,
+            keyVersion: account.keyVersion,
+            readAttachment: async (attachmentId) => {
+              // Bytes encrypted on this device come first: it is what makes an image inserted with no network
+              // visible straight away, and what keeps a note readable offline.
+              const row = await db?.attachments.get(attachmentId);
+              if (row?.cachedBlob && row.contentIv !== null) {
+                return fetchAttachment(account.dek, account.keyVersion, attachmentId, {
+                  bytes: new Uint8Array(await row.cachedBlob.arrayBuffer()) as Bytes,
+                  contentIv: row.contentIv,
+                  contentType: row.contentType,
+                });
+              }
+              return fetchAttachment(account.dek, account.keyVersion, attachmentId);
+            },
+          })
+        : null,
+    [account, db],
   );
 
   useEffect(() => {
@@ -565,7 +589,17 @@ export function App() {
         keyVersion: account.keyVersion,
         now,
         readAttachment: async (attachmentId) => {
-          const read = await fetchAttachment(account.dek, account.keyVersion, attachmentId);
+          // Whatever is on this device is read from here, so an export works with no network and includes an
+          // image inserted offline.
+          const row = await db.attachments.get(attachmentId);
+          const read =
+            row?.cachedBlob && row.contentIv !== null
+              ? await fetchAttachment(account.dek, account.keyVersion, attachmentId, {
+                  bytes: new Uint8Array(await row.cachedBlob.arrayBuffer()) as Bytes,
+                  contentIv: row.contentIv,
+                  contentType: row.contentType,
+                })
+              : await fetchAttachment(account.dek, account.keyVersion, attachmentId);
           return {
             bytes: read.bytes,
             contentType: read.contentType,
@@ -919,54 +953,88 @@ export function App() {
     });
   }, []);
 
+  /**
+   * Inserts images, encrypting them here and queueing the upload (§7, §12, §32).
+   *
+   * The order matters and used to be the other way round: the bytes are encrypted and stored **first**, the
+   * reference goes into the note, and the upload is queued. That is what makes inserting an image work with no
+   * network — §32 asks for image operations offline — and it also means a failed upload no longer loses the
+   * insertion. The queue uploads the bytes and then the link, in that order.
+   */
   const uploadImages = useCallback(
     async (files: readonly File[]) => {
       if (!account || !draft || !db) {
         return;
       }
       const noteId = draft.id;
-      // The body this run is building, so the note can be written once it has been extended: the reference has
-      // to be in the stored note before the link is queued, because the link's own push reads the references
-      // from there.
+      const context: LocalContext = {
+        db,
+        dek: account.dek,
+        userId: account.userId,
+        keyVersion: account.keyVersion,
+      };
       let body = draft.body;
+
       for (const file of files) {
         try {
-          const uploaded = await uploadAttachment({
-            file,
-            dek: account.dek,
-            keyVersion: account.keyVersion,
-            attachmentId: crypto.randomUUID(),
+          const attachmentId = crypto.randomUUID();
+          const bytes = new Uint8Array(await file.arrayBuffer()) as Bytes;
+          if (bytes.byteLength === 0) {
+            throw new Error("The file is empty.");
+          }
+          if (bytes.byteLength > MAX_ATTACHMENT_BYTES) {
+            throw new Error(
+              `Each file must be under ${Math.round(MAX_ATTACHMENT_BYTES / (1024 * 1024))} MB.`,
+            );
+          }
+
+          const { ciphertext, iv, plaintextSize } = await encryptAttachmentBytes(
+            account.dek,
+            attachmentId,
+            account.keyVersion,
+            bytes,
+          );
+          const filename = file.name.length > 0 ? file.name : "attachment";
+          const now = Date.now();
+
+          await db.attachments.put({
+            id: attachmentId,
+            r2Key: `attachments/${attachmentId}`,
+            contentType: file.type.length > 0 ? file.type : "application/octet-stream",
+            sizeBytes: ciphertext.byteLength,
+            name: await encryptAttachmentName(
+              account.dek,
+              attachmentId,
+              account.keyVersion,
+              filename,
+            ),
+            // The ciphertext, held for the upload that may only happen once the network returns.
+            cachedBlob: new Blob([ciphertext as BlobPart]),
+            cachedAt: now,
+            contentIv: iv,
+            plaintextSizeBytes: plaintextSize,
+            createdAt: now,
+            syncedAt: null,
           });
-          body = `${body}${body.endsWith("\n") || body.length === 0 ? "" : "\n"}${uploaded.markdown}\n`;
+          await enqueueChange(db, {
+            objectType: "attachment",
+            objectId: attachmentId,
+            operation: "create",
+            baseRevision: null,
+          });
+
+          body = `${body}${body.endsWith("\n") || body.length === 0 ? "" : "\n"}${attachmentMarkdown(attachmentId, filename)}\n`;
           setDraft((current) =>
             current && current.id === noteId ? { ...current, body } : current,
           );
 
-          // Saved, not just shown. Pasting an image used to update the editor alone and queue the link
-          // straight away: the push then read the references from the *stored* note, found none, and quietly
-          // acknowledged the entry — so the image was uploaded but never linked, and the sweep that collects
-          // unreferenced attachments would have taken it.
-          const context: LocalContext = {
-            db,
-            dek: account.dek,
-            userId: account.userId,
-            keyVersion: account.keyVersion,
-          };
+          // Saved, not just shown: the link's own upload reads the references from the stored note.
           await updateLocalNote(context, { id: noteId, title: draft.title, body });
           await enqueueAttachmentLinkChange(db, noteId);
-          // The image is safe locally, but its reference still has to travel: without a pass it would sit in
-          // the queue until some unrelated edit happened to schedule one.
           scheduler.current?.scheduleAfterIdle();
-          setMessage("Image encrypted and attached.");
+          setMessage("Image encrypted and attached. It uploads with the next sync.");
         } catch (error) {
-          if (error instanceof ApiError && error.status === 401) {
-            // The device key can unlock offline, so a note is editable while the server
-            // session has already expired; attaching needs the session back.
-            await handleRevocation();
-            setMessage("Your session expired. Sign in again to attach images.");
-            return;
-          }
-          setMessage(error instanceof Error ? error.message : "The upload failed.");
+          setMessage(error instanceof Error ? error.message : "The image could not be attached.");
         }
       }
     },
@@ -1159,6 +1227,7 @@ export function App() {
     return (
       <main className="auth">
         <h1>SecureNotes</h1>
+        <AppVersion />
         <SetupScreen
           onEnrolled={async (unlocked) => {
             setAccount(unlocked.account);
@@ -1184,6 +1253,7 @@ export function App() {
     return (
       <main className="auth">
         <h1>SecureNotes</h1>
+        <AppVersion />
         <LoginScreen
           db={db}
           message={message}
@@ -1212,6 +1282,7 @@ export function App() {
     return (
       <main className="auth">
         <h1>SecureNotes</h1>
+        <AppVersion />
         <UnlockScreen
           db={db}
           message={message}
@@ -1276,6 +1347,9 @@ export function App() {
           <button type="button" className="primary" onClick={() => void createNote()}>
             New note
           </button>
+          {/* §32: the application version is visible. It comes from the build, so what is on screen is what was
+              deployed rather than a number written into the source twice. */}
+          <AppVersion />
           <nav>
             <button type="button" onClick={() => setQuery("")}>
               All notes ({notes.filter((entry) => entry.note.deletedAt === null).length})
@@ -1874,6 +1948,20 @@ function ConflictPanel({
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * The application version (§32, Platform).
+ *
+ * Shown on the screens a user is on when something goes wrong — before signing in, and in the shell — because the
+ * point of showing it is that they can tell someone which build they are using.
+ */
+function AppVersion() {
+  return (
+    <p className="muted" data-testid="app-version">
+      SecureNotes {__APP_VERSION__}
+    </p>
   );
 }
 

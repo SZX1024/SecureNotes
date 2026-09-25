@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
@@ -24,7 +24,15 @@ function stubApi(payload: unknown, status = 200) {
   );
 }
 
-afterEach(() => {
+afterEach(async () => {
+  // The shell starts work of its own — a status probe, a sync pass — that settles after the test body returns. Let
+  // it finish while the DOM is still here: torn down first, React's scheduler runs in a Node context where
+  // `window` does not exist, which vitest reports as an unhandled error and which made this suite intermittently
+  // red for reasons that had nothing to do with what it asserts.
+  await new Promise((resolve) => {
+    setTimeout(resolve, 20);
+  });
+  cleanup();
   vi.unstubAllGlobals();
 });
 

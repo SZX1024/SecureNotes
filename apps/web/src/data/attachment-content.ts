@@ -81,37 +81,72 @@ function metadataPath(attachmentId: string): string {
   return `${ATTACHMENT_URL_PREFIX.replace(/^\/api\/v1/, "")}${attachmentId}`;
 }
 
-/** Fetches and decrypts one attachment, returning plaintext and the type the server recorded. */
+/** The bytes and IV of an attachment that is already on this device, from an offline insertion or a cache. */
+export interface CachedAttachment {
+  bytes: Bytes;
+  contentIv: string;
+  contentType: string;
+}
+
+/**
+ * Reads and decrypts one attachment, returning plaintext and the type the server recorded.
+ *
+ * `cached` is what makes this work with no network: an attachment whose bytes were encrypted on this device holds
+ * its own ciphertext and IV, so showing it — or exporting it — needs nothing from the server. Without it the
+ * bytes and the IV are fetched, which is the normal case for a note pulled from another device.
+ */
 export async function fetchAttachment(
   dek: CryptoKey,
   keyVersion: number,
   attachmentId: string,
+  cached?: CachedAttachment,
 ): Promise<{ bytes: Bytes; contentType: string }> {
-  const { attachment } = await apiRequest<AttachmentMeta>(metadataPath(attachmentId));
-  const response = await fetch(`${ATTACHMENT_URL_PREFIX}${attachmentId}/content`, {
-    credentials: "same-origin",
-    cache: "no-store",
-  });
-  if (!response.ok) {
-    throw new Error(`the attachment could not be read (${response.status})`);
-  }
+  let envelope: CryptoEnvelope;
 
-  // The IV is filed with the metadata, so the envelope is assembled here: the content endpoint deliberately
-  // returns bare ciphertext, and the AAD binds the blob to this attachment's id and revision.
-  const envelope: CryptoEnvelope = {
-    crypto_version: attachment.cryptoVersion,
-    key_version: attachment.keyVersion,
-    alg: "AES-256-GCM",
-    iv: attachment.contentIv,
-    ciphertext: bytesToBase64(new Uint8Array(await response.arrayBuffer()) as Bytes),
-  };
+  if (cached) {
+    envelope = {
+      crypto_version: 1,
+      key_version: keyVersion,
+      alg: "AES-256-GCM",
+      iv: cached.contentIv,
+      ciphertext: bytesToBase64(cached.bytes),
+    };
+  } else {
+    const { attachment } = await apiRequest<AttachmentMeta>(metadataPath(attachmentId));
+    const response = await fetch(`${ATTACHMENT_URL_PREFIX}${attachmentId}/content`, {
+      credentials: "same-origin",
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      throw new Error(`the attachment could not be read (${response.status})`);
+    }
+
+    // The IV is filed with the metadata, so the envelope is assembled here: the content endpoint deliberately
+    // returns bare ciphertext, and the AAD binds the blob to this attachment's id and revision.
+    envelope = {
+      crypto_version: attachment.cryptoVersion,
+      key_version: attachment.keyVersion,
+      alg: "AES-256-GCM",
+      iv: attachment.contentIv,
+      ciphertext: bytesToBase64(new Uint8Array(await response.arrayBuffer()) as Bytes),
+    };
+  }
 
   const plaintext = await decryptObject(
     dek,
     { objectType: "attachment_blob", objectId: attachmentId, revision: 1, keyVersion },
     envelope,
   );
-  return { bytes: plaintext as Bytes, contentType: attachment.contentType };
+  return {
+    bytes: plaintext as Bytes,
+    contentType: cached?.contentType ?? (await contentTypeOf(attachmentId)),
+  };
+}
+
+/** The type recorded for an attachment, read only when the cached copy did not carry it. */
+async function contentTypeOf(attachmentId: string): Promise<string> {
+  const { attachment } = await apiRequest<AttachmentMeta>(metadataPath(attachmentId));
+  return attachment.contentType;
 }
 
 export function createAttachmentUrls(options: AttachmentUrlOptions): AttachmentUrls {

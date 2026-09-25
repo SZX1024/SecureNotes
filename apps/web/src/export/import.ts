@@ -400,6 +400,9 @@ export async function applyImport(input: ApplyInput): Promise<ImportReport> {
         name,
         cachedBlob: null,
         cachedAt: null,
+        // The bytes are already uploaded by the time this row is written, so there is nothing cached to describe.
+        contentIv: null,
+        plaintextSizeBytes: null,
         createdAt: now,
         // The upload has already happened, so the row begins as confirmed.
         syncedAt: now,

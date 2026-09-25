@@ -124,6 +124,14 @@ export const UPGRADES: Readonly<Record<number, RowTransform>> = {
     }
     return row;
   },
+  // 4 -> 5: attachments gain the IV and plaintext size of their content. Rows written before this have no
+  // cached bytes, so there is nothing to describe and both stay null.
+  5: (table, row) => {
+    if (table === "attachments") {
+      return { contentIv: null, plaintextSizeBytes: null, ...row };
+    }
+    return row;
+  },
   // 3 -> 4: folders gain a revision. An existing folder has only ever had one.
   4: (table, row) => {
     if (table === "folders") {

@@ -1017,6 +1017,97 @@ print(json.dumps({"names": names, "format": manifest["format"], "version": manif
     const importMessage = await page.evaluate(() => document.body.innerText);
     check("the import reports what it did", /Imported \d+ new item/.test(importMessage), "");
 
+    // 9b2. Image operations with no network (§32). This is what the local-first design is for: the bytes are
+    // encrypted here, the reference goes into the note, and the upload waits for the network. Proven by going
+    // offline, pasting, checking what the device holds, and then coming back online to watch it upload.
+    const localAttachmentState = () =>
+      page.evaluate(async () => {
+        const names = (await indexedDB.databases()).map((entry) => entry.name ?? "");
+        const name = names.find((candidate) => candidate.startsWith("securenotes")) ?? names[0];
+        const db = await new Promise((resolve, reject) => {
+          const request = indexedDB.open(name);
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+        const read = (store) =>
+          new Promise((resolve, reject) => {
+            const request = db.transaction(store).objectStore(store).getAll();
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+          });
+        const attachments = await read("attachments");
+        const queue = await read("syncQueue");
+        return {
+          attachments: attachments.map((row) => ({
+            synced: row.syncedAt !== null,
+            cached: row.cachedBlob !== null,
+          })),
+          queued: queue.map((row) => `${row.objectType}:${row.attempts}`),
+        };
+      });
+
+    await context.setOffline(true);
+    await page.evaluate(async () => {
+      const base64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+      const binary = atob(base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index);
+      }
+      const transfer = new DataTransfer();
+      transfer.items.add(new File([bytes], "offline.png", { type: "image/png" }));
+      const target =
+        document.querySelector(".cm-content") ?? document.querySelector(".wysiwyg-editor");
+      target?.dispatchEvent(
+        new ClipboardEvent("paste", { clipboardData: transfer, bubbles: true, cancelable: true }),
+      );
+    });
+    await page.waitForTimeout(5000);
+
+    const offlineAttachments = await localAttachmentState();
+    const listedOffline = await page.evaluate(
+      () => document.querySelectorAll(".attachments li").length,
+    );
+    diagnostics.push(
+      `OFFLINE: ${JSON.stringify({ ...offlineAttachments, listed: listedOffline })}`,
+    );
+    check(
+      "an image can be attached with no network (§32)",
+      listedOffline >= 1 && offlineAttachments.attachments.some((row) => row.cached && !row.synced),
+      JSON.stringify(offlineAttachments),
+    );
+    check(
+      "its upload is queued rather than lost (§32)",
+      offlineAttachments.queued.some((entry) => entry.startsWith("attachment:")),
+      JSON.stringify(offlineAttachments.queued),
+    );
+
+    await context.setOffline(false);
+    const callsBeforeOfflineUpload = noteCalls.length;
+    await page.getByRole("button", { name: "Sync now", exact: true }).click();
+    const uploadDeadline = Date.now() + 40_000;
+    let uploaded = false;
+    while (Date.now() < uploadDeadline && !uploaded) {
+      const state = await localAttachmentState();
+      uploaded =
+        state.attachments.every((row) => row.synced) &&
+        !state.queued.some((entry) => entry.startsWith("attachment:"));
+      if (!uploaded) {
+        await page.waitForTimeout(1000);
+      }
+    }
+    const uploadCalls = noteCalls
+      .slice(callsBeforeOfflineUpload)
+      .filter((call) => call.path.includes("/attachments"))
+      .map((call) => `${call.method} ${call.path} -> ${call.status}`);
+    diagnostics.push(`OFFLINE UPLOAD: ${JSON.stringify(uploadCalls)}`);
+    check(
+      "the queued image uploads once the network returns (§32)",
+      uploaded,
+      JSON.stringify(uploadCalls),
+    );
+
     // 9c2. The recovery package (§20). Separate from the export, versioned, and — the requirement with teeth —
     // it must not contain the authenticator secret. That is checked against the real secret this run enrolled with,
     // because a list of field names is exactly what a leak would not appear in.
@@ -1135,6 +1226,50 @@ print(json.dumps({
       afterRebind.slice(0, 80).replace(/\n+/g, " "),
     );
   }
+
+  // 12. Platform (§32): the version is visible, and the application can be installed.
+  const version = await page.evaluate(
+    () => document.querySelector('[data-testid="app-version"]')?.textContent ?? "",
+  );
+  check(
+    "the application version is visible (§32)",
+    /SecureNotes \d+\.\d+\.\d+/.test(version),
+    version.trim(),
+  );
+
+  const manifest = await page.evaluate(async () => {
+    const response = await fetch("/manifest.webmanifest", { cache: "no-store" });
+    if (!response.ok) {
+      return { status: response.status };
+    }
+    const parsed = await response.json();
+    // The icons are checked too: a manifest that installs and then has no icon is not installable in practice.
+    const icons = await Promise.all(
+      (parsed.icons ?? []).map(async (icon) => {
+        const iconResponse = await fetch(icon.src, { cache: "no-store" });
+        return { sizes: icon.sizes, ok: iconResponse.ok };
+      }),
+    );
+    return {
+      status: 200,
+      name: parsed.name,
+      shortName: parsed.short_name,
+      startUrl: parsed.start_url,
+      display: parsed.display,
+      icons,
+    };
+  });
+  diagnostics.push(`MANIFEST: ${JSON.stringify(manifest)}`);
+  check(
+    "a web app manifest is served and installable (§32)",
+    manifest.status === 200 &&
+      typeof manifest.name === "string" &&
+      typeof manifest.startUrl === "string" &&
+      typeof manifest.display === "string" &&
+      (manifest.icons ?? []).length > 0 &&
+      (manifest.icons ?? []).every((icon) => icon.ok),
+    JSON.stringify(manifest),
+  );
 
   // 11. The app's own errors.
   const ownPageErrors = pageErrors.filter((message) => !EMBED_ORIGINATED.test(message));

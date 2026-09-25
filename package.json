@@ -18,7 +18,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "check:version": "node scripts/check-version.mjs",
-    "check": "pnpm check:version && pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
+    "acceptance": "node scripts/acceptance.mjs",
+    "check": "pnpm check:version && pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm acceptance",
     "e2e": "node scripts/e2e.mjs"
   },
   "devDependencies": {

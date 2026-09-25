@@ -65,9 +65,17 @@ export interface LocalAttachment {
   contentType: string;
   sizeBytes: number;
   name: CryptoEnvelope;
-  /** Cached ciphertext, evictable because it can be re-downloaded (§8). */
+  /**
+   * Cached ciphertext, evictable because it can be re-downloaded (§8).
+   *
+   * It is also what makes an attachment inserted while offline possible: the bytes are encrypted here, held, and
+   * uploaded when the network returns.
+   */
   cachedBlob: Blob | null;
   cachedAt: number | null;
+  /** The IV the cached ciphertext was produced with, needed to upload or decrypt it later. */
+  contentIv: string | null;
+  plaintextSizeBytes: number | null;
   createdAt: number;
   syncedAt: number | null;
 }
@@ -176,6 +184,22 @@ export const SCHEMA_DEFINITIONS: readonly SchemaDefinition[] = [
     // on instead of overwriting (§16). Like version 3 this is a row-shape change, and the migration
     // supplies the default for existing rows.
     version: 4,
+    stores: {
+      notes: "id, folderId, updatedAt, deletedAt, syncedAt",
+      folders: "id, parentId, updatedAt, syncedAt",
+      tags: "id, updatedAt, syncedAt",
+      noteTags: "[noteId+tagId], noteId, tagId",
+      attachments: "id, syncedAt, cachedAt",
+      syncQueue: "++id, objectId, queuedAt, nextAttemptAt",
+      keyMaterial: "id",
+      deviceKeys: "id",
+      meta: "key",
+    },
+  },
+  {
+    // Version 5 gives an attachment the IV and plaintext size of its content, so bytes encrypted while offline can
+    // be uploaded later and decrypted from the cache without asking the server for anything.
+    version: 5,
     stores: {
       notes: "id, folderId, updatedAt, deletedAt, syncedAt",
       folders: "id, parentId, updatedAt, syncedAt",

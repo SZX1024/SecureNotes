@@ -29,7 +29,13 @@ import {
   type LocalContext,
 } from "./repository";
 import { joinNoteDocument, splitNoteDocument } from "./note-document";
-import { databaseNameFor, openDatabase, type SecureNotesDatabase } from "../local/schema";
+import {
+  databaseNameFor,
+  openDatabase,
+  SCHEMA_VERSION,
+  type SecureNotesDatabase,
+} from "../local/schema";
+import { enqueueChange } from "../local/sync-queue";
 import { NoteSearchIndex, highlightSegments } from "../search";
 
 /**
@@ -538,5 +544,38 @@ describe("organisation writes (§9, §10, §16)", () => {
     // Links point at the id, which does not change.
     expect(await readLocalNoteTags(context, "note-z")).toEqual(["tag-z"]);
     await context.close();
+  });
+});
+
+describe("unsynced work survives a restart (§31, §32)", () => {
+  it("is still queued when the database is opened again", async () => {
+    const name = `${databaseNameFor(SCHEMA_VERSION)}-restart`;
+    await Dexie.delete(name).catch(() => undefined);
+    const first = openDatabase(name);
+    await first.open();
+
+    await enqueueChange(first, {
+      objectType: "attachment",
+      objectId: "attachment-1",
+      operation: "create",
+      baseRevision: null,
+    });
+    await enqueueChange(first, {
+      objectType: "note_attachment",
+      objectId: "note-1",
+      operation: "update",
+      baseRevision: null,
+    });
+    first.close();
+
+    // A new connection is what an application restart looks like from the database's point of view, and the work
+    // that had not been acknowledged yet has to still be there: §32 asks for unsynced operations to survive it.
+    const second = openDatabase(name);
+    await second.open();
+    const queued = (await second.syncQueue.toArray()).map((entry) => entry.objectType).sort();
+
+    expect(queued).toEqual(["attachment", "note_attachment"]);
+    second.close();
+    await Dexie.delete(name).catch(() => undefined);
   });
 });

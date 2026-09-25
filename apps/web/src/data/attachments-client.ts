@@ -106,6 +106,53 @@ export async function decryptAttachmentName(
   return new TextDecoder().decode(plaintext);
 }
 
+/**
+ * Uploads bytes that are **already encrypted**.
+ *
+ * Used for an attachment whose bytes were encrypted while the device was offline: the ciphertext was produced and
+ * held then, and there is no reason to decrypt and re-encrypt merely to send it. The metadata is the same contract
+ * the server validates either way.
+ */
+export async function uploadEncryptedAttachment(input: {
+  attachmentId: string;
+  ciphertext: Bytes;
+  contentIv: string;
+  plaintextSize: number;
+  name: CryptoEnvelope;
+  contentType: string;
+  csrfToken: string | null;
+}): Promise<void> {
+  const metadata = {
+    id: input.attachmentId,
+    name: input.name,
+    contentType: input.contentType,
+    // The ciphertext is what the server stores and counts, exactly as for a fresh upload.
+    sizeBytes: input.ciphertext.byteLength,
+    contentIv: input.contentIv,
+    plaintextSizeBytes: input.plaintextSize,
+  };
+
+  const form = new FormData();
+  form.set("metadata", JSON.stringify(metadata));
+  form.set(
+    "blob",
+    new File([input.ciphertext as BlobPart], "blob", { type: "application/octet-stream" }),
+  );
+
+  const headers = new Headers();
+  if (input.csrfToken !== null) {
+    headers.set(CSRF_HEADER_NAME, input.csrfToken);
+  }
+  const response = await fetch("/api/v1/attachments", { method: "POST", body: form, headers });
+  if (!response.ok) {
+    throw new ApiError(
+      response.status === 401 ? "UNAUTHENTICATED" : "INTERNAL",
+      response.status,
+      "the stored attachment could not be uploaded",
+    );
+  }
+}
+
 export async function uploadAttachment(input: AttachmentUploadInput): Promise<UploadedAttachment> {
   const { file, dek, keyVersion, attachmentId } = input;
 

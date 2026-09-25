@@ -59,6 +59,8 @@ function attachment(
     name: { crypto_version: 1, key_version: 1, alg: "AES-256-GCM", iv: "iv", ciphertext: "ct" },
     cachedBlob: new Blob([new Uint8Array(options.size)]),
     cachedAt: options.cachedAt,
+    contentIv: "AAAAAAAAAAAAAAAA",
+    plaintextSizeBytes: options.size - 16,
     createdAt: 1,
     syncedAt: options.synced ? 1 : null,
   };

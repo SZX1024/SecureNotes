@@ -1,3 +1,6 @@
+import type { Bytes } from "@securenotes/shared";
+
+import { uploadEncryptedAttachment } from "../data/attachments-client";
 import type { SecureNotesDatabase, SyncQueueItem } from "../local/schema";
 import { apiRequest, readCsrfToken } from "../api/client";
 import { ApiError } from "../api/client";
@@ -179,6 +182,41 @@ export async function pushChange(
       } else {
         await apiRequest(`/tags/${change.objectId}`, { method: "PATCH", body: { name: tag.name } });
       }
+      return "ok";
+    }
+
+    if (change.objectType === "attachment") {
+      const row = await db.attachments.get(change.objectId);
+      if (!row) {
+        // The row is gone, so there is nothing to upload and holding the entry would block the queue.
+        return "ok";
+      }
+      if (row.syncedAt !== null) {
+        return "ok";
+      }
+      if (
+        row.cachedBlob === null ||
+        row.contentIv === null ||
+        row.plaintextSizeBytes === null ||
+        typeof row.cachedBlob.arrayBuffer !== "function"
+      ) {
+        // Encrypted on this device for a later upload, the bytes have to be there. Without them the entry cannot
+        // be completed, and a silent success would drop the user's attachment.
+        return "retry";
+      }
+
+      // Already encrypted: this is the ciphertext produced when the note was edited offline, so it goes up as it
+      // stands. `name` comes from the row for the same reason — the filename was encrypted then too.
+      await uploadEncryptedAttachment({
+        attachmentId: row.id,
+        ciphertext: new Uint8Array(await row.cachedBlob.arrayBuffer()) as Bytes,
+        contentIv: row.contentIv,
+        plaintextSize: row.plaintextSizeBytes,
+        name: row.name,
+        contentType: row.contentType,
+        csrfToken: readCsrfToken(),
+      });
+      await db.attachments.put({ ...row, syncedAt: Date.now() });
       return "ok";
     }
 

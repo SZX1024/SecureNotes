@@ -1533,7 +1533,6 @@ ok  merging an archive that is already here changes nothing (§20) 4 -> 4
 
 **恢复包**（§20）：独立于普通导出、**版本化**、**不含明文 TOTP 密钥**，只含恢复所需的最小受保护密钥/恢复元数据。
 
-
 ## 35. P8（第 3 批）：恢复包 —— P8 完成
 
 ### 35.1 需求（§20）
@@ -1542,11 +1541,11 @@ ok  merging an archive that is already here changes nothing (§20) 4 -> 4
 
 ### 35.2 交付
 
-| 位置 | 内容 |
-| --- | --- |
+| 位置                                           | 内容                                                                                                                                     |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | `apps/worker/src/services/recovery-package.ts` | 组装**最小**材料：账户包裹、**每枚未使用恢复码**的包裹（各带自己的 salt）、KDF 参数与上下文常量、版本号；`excludes` 显式列出**不含**什么 |
-| `apps/worker/src/routes/export.ts` | `GET /export/recovery-package`（需会话） |
-| `apps/web/src/export/recovery.ts` | 写成**版本化 ZIP**：`README.txt` + `manifest.json` + `key-material.json` |
+| `apps/worker/src/routes/export.ts`             | `GET /export/recovery-package`（需会话）                                                                                                 |
+| `apps/web/src/export/recovery.ts`              | 写成**版本化 ZIP**：`README.txt` + `manifest.json` + `key-material.json`                                                                 |
 
 **README 明确区分**「恢复账户」与「备份笔记」——把两者搞混的代价很高；并说明每个包裹各自需要什么才能解开
 （账户包裹要用户名 + 认证器密钥；其余每个要各自那枚恢复码），**文件本身打不开任何东西**。
@@ -1572,14 +1571,57 @@ ok  it says what it does not contain (§20)           excludes: totp_secret, not
 
 ### 35.5 P8 状态
 
-| 子项 | 状态 |
-| --- | --- |
-| 导出（明文 ZIP、30 天提醒、导出后无残留） | ✅ |
-| 导入（事务性 + 回滚测试、重复 id 由用户选择、智能合并） | ✅ |
-| 恢复包（独立、版本化、不含明文 TOTP） | ✅ |
+| 子项                                                    | 状态 |
+| ------------------------------------------------------- | ---- |
+| 导出（明文 ZIP、30 天提醒、导出后无残留）               | ✅   |
+| 导入（事务性 + 回滚测试、重复 id 由用户选择、智能合并） | ✅   |
+| 恢复包（独立、版本化、不含明文 TOTP）                   | ✅   |
 
 `pnpm check` ✅ **607 测试**（31 + 349 + 227）· `pnpm e2e` ✅ **77 项**。
 
 ### 35.6 剩余阶段
 
 **P9：安全加固与验收**（需求 §31 全部用例 + §32 逐项），交付物是**验收对照报告**。
+
+## 36. P9：安全加固与验收 —— 验收对照报告
+
+### 36.1 交付物：一份**生成**的验收报告
+
+`ACCEPTANCE.md` 由 `node scripts/acceptance.mjs` **从仓库生成**：§32 的每一条与 §31 的每一项都指向仓库里
+**具体文件与行号**。之所以生成而不是手写，是因为手写的报告会随代码漂移，而失败模式是「文档声称有测试覆盖，
+实际没有」。该脚本**已进入 `pnpm check`**：任何一条证据消失，门槛就变红。
+
+### 36.2 硬化的内容：找出并修掉的真实缺口
+
+| 缺口                                                                                                   | 处理                                                                                           |
+| ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
+| **§32「Application version is visible」根本没做**：`__APP_VERSION__`（由构建注入）**定义了但从未显示** | 抽出 `AppVersion` 组件，放到三个未登录界面 + 侧栏（报问题时用户正在的界面）；加测试 + E2E 检查 |
+| **§32「PWA installs」从未被测试**：`manifest.webmanifest` 存在但无人验证                               | E2E 现在取回 manifest，并**逐一取回每个图标**，断言可安装（name/start_url/display/icons）      |
+| **§32「Image operations work offline」实际不可用**：插图**先上传**，离线即失败、引用根本不插入         | 改为**离线优先**：本地加密并入队 → 立即可见 → 联网后自动上传（见 36.3）                        |
+
+### 36.3 离线优先的图片（这一条改动了产品行为）
+
+现在的顺序是：`encryptAttachmentBytes` → 写入本地 `attachments` 行（含 `contentIv`/`plaintextSizeBytes`，
+本地 schema **v5**）→ 入队 `attachment` 变更 → 把引用插入笔记并保存 → 触发同步。
+`pushChange` 新增 `attachment` 分支：**上传已加密的字节**（不重新加密，否则 IV 与本地记录不符）；
+附件内容读取**优先用本地缓存**，所以离线也能显示与导出。
+
+E2E 端到端证明（**82 项**）：
+
+```text
+ok  an image can be attached with no network (§32)         本地已缓存、未同步
+ok  its upload is queued rather than lost (§32)            attachment:0 在队列里
+ok  the queued image uploads once the network returns       POST /attachments 201 → 链接 200
+```
+
+### 36.4 一处**不能**在浏览器里证明的事，如实写在报告里
+
+「未同步操作挺过重启」：E2E 跑的是开发服务器，**离线时连页面都取不到**（SW 只在生产注册，这是刻意的设计，
+避免陈旧 worker 供应陈旧模块）。所以队列持久化**在单元层**证明（关闭连接再打开，条目仍在）、
+service worker 的行为由其自身测试覆盖；报告里明确写出这个边界，而不是含糊过去。
+另外两条已知边界也写进了报告：**移动端布局没有真人看过**、**视觉编辑手感无法由测试判定**；
+以及一个已决策的产品限制：YouTube 嵌入在严格沙箱下降级（HANDOFF §22.4）。
+
+### 36.5 结果
+
+`pnpm check` ✅ **611 测试**（31 + 353 + 227）+ **76/76 验收项有证据** · `pnpm e2e` ✅ **82 项**。
