@@ -56,6 +56,12 @@ import {
   type FolderNode,
   type FolderRow,
 } from "./data/organisation";
+import { ActivityBar } from "./ui/ActivityBar";
+import { VIEW_LABELS, type PanelView } from "./ui/panels";
+import { Icon } from "./ui/Icon";
+import { MenuBar, type MenuDefinition } from "./ui/MenuBar";
+import { SettingsDialog } from "./ui/SettingsDialog";
+import { StatusBar } from "./ui/StatusBar";
 import { FolderTree, NoteOrganisation, TagList } from "./ui/Organisation";
 import { defaultEditorMode, loadEditorMode, saveEditorMode, type EditorMode } from "./editor/mode";
 import {
@@ -104,12 +110,12 @@ import {
 } from "./editor/attachments";
 import {
   loadThemePreference,
-  nextThemePreference,
   resolveTheme,
   saveThemePreference,
   type ThemePreference,
 } from "./theme";
 import {
+  SHORTCUTS,
   buildCommands,
   filterCommands,
   formatShortcut,
@@ -163,6 +169,10 @@ export function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState("");
   const [sidebarVisible, setSidebarVisible] = useState(true);
+  /** Which view the side panel shows; null when it is collapsed. */
+  // Notes by default: opening a notebook and being shown a folder tree is the wrong first impression.
+  const [panelView, setPanelView] = useState<PanelView | null>("notes");
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [preview, setPreview] = useState(false);
   const [theme, setTheme] = useState<ThemePreference>(() =>
     typeof localStorage === "undefined" ? "system" : loadThemePreference(localStorage),
@@ -1120,6 +1130,163 @@ export function App() {
    * Derived from the note's own text rather than a separate list, so the panel cannot
    * disagree with what the note actually contains.
    */
+  /** The hidden import input: the File menu item is an ordinary action, the input keeps its label. */
+  const importInput = useRef<HTMLInputElement>(null);
+
+  const chooseTheme = useCallback((next: ThemePreference) => {
+    setTheme(next);
+    saveThemePreference(localStorage, next);
+  }, []);
+
+  const setEditorModeAndRemember = useCallback((next: EditorMode) => {
+    setEditorMode(next);
+    saveEditorMode(localStorage, next);
+  }, []);
+
+  /** The shortcut a command has, for the menu that shows it. */
+  const shortcutFor = (id: string): string | undefined => {
+    const found = SHORTCUTS.find((entry) => entry.id === id);
+    return found === undefined ? undefined : formatShortcut(found);
+  };
+
+  /**
+   * The menus (§22).
+   *
+   * Every item is something the interface could already do: the top bar is where file operations belong, not a new
+   * set of features. The theme and the sort order appear both here and in the settings dialog because they are the
+   * two a writer changes mid-sentence, and reaching them from `View` does not move the mouse away from the text.
+   *
+   * There is no "Edit" menu. The only genuinely editing actions are the formatting commands, and those belong in
+   * the editor's own toolbar; a menu that repeated `File` and `View` would be an empty gesture.
+   */
+  const menus: MenuDefinition[] = [
+    {
+      id: "file",
+      label: "File",
+      accessKey: "f",
+      items: [
+        {
+          id: "new",
+          label: "New note",
+          shortcut: shortcutFor("new-note"),
+          onSelect: () => void createNote(),
+        },
+        {
+          id: "save",
+          label: "Save",
+          shortcut: shortcutFor("save-note"),
+          disabled: draft === null,
+          onSelect: () => void saveDraft(),
+        },
+        { id: "sep-1", label: "", separator: true, onSelect: () => undefined },
+        {
+          id: "export",
+          label: exporting ? "Exporting…" : "Export everything…",
+          disabled: exporting || notes.length === 0,
+          onSelect: () => void exportEverything(),
+        },
+        {
+          id: "import",
+          label: "Import an archive…",
+          disabled: exporting,
+          onSelect: () => importInput.current?.click(),
+        },
+        {
+          id: "recovery",
+          label: "Recovery package…",
+          disabled: exporting,
+          onSelect: () => void downloadRecoveryPackage(),
+        },
+        { id: "sep-2", label: "", separator: true, onSelect: () => undefined },
+        {
+          id: "recycle",
+          label: "Recycle bin",
+          shortcut: shortcutFor("show-recycle-bin"),
+          onSelect: () => setScreen("recycle-bin"),
+        },
+      ],
+    },
+    {
+      id: "view",
+      label: "View",
+      accessKey: "v",
+      items: [
+        {
+          id: "theme-system",
+          label: "Theme: follow system",
+          checked: theme === "system",
+          onSelect: () => chooseTheme("system"),
+        },
+        {
+          id: "theme-light",
+          label: "Theme: light",
+          checked: theme === "light",
+          onSelect: () => chooseTheme("light"),
+        },
+        {
+          id: "theme-dark",
+          label: "Theme: dark",
+          checked: theme === "dark",
+          onSelect: () => chooseTheme("dark"),
+        },
+        { id: "sep-3", label: "", separator: true, onSelect: () => undefined },
+        {
+          id: "sidebar",
+          label: sidebarVisible ? "Hide side panel" : "Show side panel",
+          shortcut: shortcutFor("toggle-sidebar"),
+          onSelect: () => setSidebarVisible((visible) => !visible),
+        },
+        {
+          id: "wysiwyg",
+          label: "Visual editor",
+          checked: editorMode === "wysiwyg",
+          onSelect: () => setEditorModeAndRemember("wysiwyg"),
+        },
+        {
+          id: "source",
+          label: "Markdown source",
+          checked: editorMode === "source",
+          onSelect: () => setEditorModeAndRemember("source"),
+        },
+        {
+          id: "preview",
+          label: preview ? "Back to editing" : "Preview",
+          checked: preview,
+          disabled: draft === null,
+          onSelect: () => setPreview((current) => !current),
+        },
+        { id: "sep-4", label: "", separator: true, onSelect: () => undefined },
+        ...SORT_KEYS.map((key) => ({
+          id: `sort-${key}`,
+          label: `Order: ${SORT_LABELS[key]}`,
+          checked: sortKey === key,
+          onSelect: () => setSortKey(key),
+        })),
+      ],
+    },
+    {
+      id: "help",
+      label: "Help",
+      accessKey: "h",
+      items: [
+        { id: "settings", label: "Settings…", onSelect: () => setSettingsOpen(true) },
+        {
+          id: "commands",
+          label: "Command palette",
+          shortcut: shortcutFor("command-palette"),
+          onSelect: () => setPaletteOpen(true),
+        },
+        { id: "shortcuts", label: "Keyboard shortcuts", onSelect: () => setPaletteOpen(true) },
+        { id: "sep-5", label: "", separator: true, onSelect: () => undefined },
+        {
+          id: "about",
+          label: `SecureNotes ${__APP_VERSION__}`,
+          onSelect: () => setSettingsOpen(true),
+        },
+      ],
+    },
+  ];
+
   const draftAttachments = useMemo(
     () => (draft ? attachmentReferencesIn(draft.body) : []),
     [draft],
@@ -1339,466 +1506,503 @@ export function App() {
   }
 
   return (
-    <main
-      className={`shell ${sidebarVisible ? "" : "sidebar-hidden"} ${draft ? "mobile-editing" : ""}`}
-    >
-      {sidebarVisible && (
-        <aside className="pane folders">
-          <button type="button" className="primary" onClick={() => void createNote()}>
-            New note
-          </button>
-          {/* §32: the application version is visible. It comes from the build, so what is on screen is what was
-              deployed rather than a number written into the source twice. */}
-          <AppVersion />
-          <nav>
-            <button type="button" onClick={() => setQuery("")}>
-              All notes ({notes.filter((entry) => entry.note.deletedAt === null).length})
-            </button>
-            <button type="button" onClick={() => setScreen("recycle-bin")}>
-              Recycle bin
-            </button>
-          </nav>
+    <div className="app">
+      <MenuBar
+        menus={menus}
+        appName="SecureNotes"
+        version={__APP_VERSION__}
+        onOpenCommands={() => setPaletteOpen(true)}
+      />
 
-          <FolderTree
-            nodes={folderTree}
-            rows={folderRows}
-            selectedId={selectedFolderId}
-            onSelect={setSelectedFolderId}
-            onCreate={(parentId, name) => void organisationActions.createFolder(parentId, name)}
-            onRename={(id, name) => void organisationActions.renameFolder(id, name)}
-            onMove={(id, parentId) => void organisationActions.moveFolder(id, parentId)}
-            onDelete={(id) => void organisationActions.deleteFolder(id)}
-          />
+      <main
+        className={`shell ${sidebarVisible ? "" : "sidebar-hidden"} ${draft ? "mobile-editing" : ""}`}
+      >
+        <ActivityBar
+          active={sidebarVisible ? panelView : null}
+          onSelect={(view) => {
+            // Selecting the view that is already showing collapses the panel: the gesture editors train into people.
+            setPanelView((current) => (current === view && sidebarVisible ? null : view));
+            setSidebarVisible(true);
+          }}
+          onOpenSettings={() => setSettingsOpen(true)}
+          syncState={conflictCount > 0 || syncState === "auth-required" ? "attention" : "ok"}
+        />
 
-          <TagList
-            tags={tagList}
-            selectedId={selectedTagId}
-            onSelect={setSelectedTagId}
-            onCreate={(name) => void organisationActions.createTag(name)}
-            onRename={(id, name) => void organisationActions.renameTag(id, name)}
-            onDelete={(id) => void organisationActions.deleteTag(id)}
-          />
-          <section className="sync-status">
-            <h2>Sync</h2>
-            <p className="muted" data-testid="sync-state">
-              {SYNC_STATE_LABELS[syncState]}
-              {conflictCount > 0 ? ` · ${conflictCount} conflict(s)` : ""}
-            </p>
-            <button type="button" onClick={() => void scheduler.current?.syncNow()}>
-              Sync now
-            </button>
-            <button
-              type="button"
-              onClick={() => void exportEverything()}
-              disabled={exporting || notes.length === 0}
-            >
-              {exporting ? "Exporting…" : "Export everything"}
-            </button>
-            <button
-              type="button"
-              onClick={() => void downloadRecoveryPackage()}
-              disabled={exporting}
-            >
-              Recovery package
-            </button>
-            <label className="file-input">
-              <span>Import…</span>
-              <input
-                type="file"
-                accept=".zip,application/zip"
-                aria-label="Import an archive"
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  // Cleared so choosing the same file twice in a row still fires.
-                  event.target.value = "";
-                  if (file) {
-                    void chooseImport(file);
-                  }
-                }}
-              />
-            </label>
-            {exportReminder !== null && (
-              <p className="muted" data-testid="export-reminder">
-                {exportReminder}
-              </p>
-            )}
-            {conflictCount > 0 && (
+        {sidebarVisible && panelView !== null && (
+          <aside className="pane side-panel" aria-label={VIEW_LABELS[panelView]}>
+            <header className="panel-header">
+              <span>{VIEW_LABELS[panelView]}</span>
               <button
                 type="button"
-                onClick={async () => {
-                  const open = await listLocalConflicts(db);
-                  const first = open.find((entry) => entry.objectType === "note");
-                  if (first) {
-                    setResolvingConflict(first.objectId);
-                  }
-                }}
+                aria-label="Hide the side panel"
+                title="Hide the side panel"
+                onClick={() => setSidebarVisible(false)}
               >
-                Resolve a conflict
+                <Icon name="sidebar" size={14} />
               </button>
+            </header>
+
+            {panelView === "notes" && (
+              <>
+                <button type="button" className="primary" onClick={() => void createNote()}>
+                  <Icon name="newNote" />
+                  New note
+                </button>
+                <nav>
+                  <button type="button" className="panel-link" onClick={() => setQuery("")}>
+                    <Icon name="allNotes" size={14} />
+                    All notes ({notes.filter((entry) => entry.note.deletedAt === null).length})
+                  </button>
+                  <button
+                    type="button"
+                    className="panel-link"
+                    onClick={() => setScreen("recycle-bin")}
+                  >
+                    <Icon name="recycleBin" size={14} />
+                    Recycle bin
+                  </button>
+                </nav>
+                {recent.length > 0 && (
+                  <section>
+                    <h2>Recently opened</h2>
+                    <ul className="panel-list">
+                      {recent.slice(0, 5).map((id) => (
+                        <li key={id}>
+                          <button type="button" className="panel-link" onClick={() => openNote(id)}>
+                            {notes.find((entry) => entry.note.id === id)?.document.title || id}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                )}
+              </>
             )}
-          </section>
-          <label className="field">
-            <span>Theme</span>
-            <select
-              value={theme}
-              onChange={(event) => {
-                const next = event.target.value as ThemePreference;
-                setTheme(next);
-                saveThemePreference(localStorage, next);
-              }}
-            >
-              <option value="system">Follow system</option>
-              <option value="light">Light</option>
-              <option value="dark">Dark</option>
-            </select>
-          </label>
-          <button
-            type="button"
-            onClick={() => {
-              const next = nextThemePreference(theme);
-              setTheme(next);
-              saveThemePreference(localStorage, next);
-            }}
-          >
-            Switch theme
-          </button>
 
-          <label className="field">
-            <span>Sort</span>
-            <select value={sortKey} onChange={(event) => setSortKey(event.target.value as SortKey)}>
-              {SORT_KEYS.map((key) => (
-                <option key={key} value={key}>
-                  {SORT_LABELS[key]}
-                </option>
-              ))}
-            </select>
-          </label>
-          {recent.length > 0 && (
-            <section>
-              <h2>Recently opened</h2>
-              <ul>
-                {recent.slice(0, 5).map((id) => (
-                  <li key={id}>
-                    <button type="button" onClick={() => openNote(id)}>
-                      {notes.find((entry) => entry.note.id === id)?.document.title || id}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
-        </aside>
-      )}
-
-      <section className="pane list">
-        <header>
-          <input
-            type="search"
-            placeholder="Search notes…"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            aria-label="Search notes"
-          />
-          <button
-            type="button"
-            onClick={() => setPaletteOpen(true)}
-            title={formatShortcut({
-              id: "command-palette",
-              key: "p",
-              ctrlOrMeta: true,
-              description: "",
-            })}
-          >
-            ⌘
-          </button>
-        </header>
-        <ul className="note-list">
-          {visibleNotes.map((note) => (
-            <li key={note.id} className={note.id === selectedId ? "selected" : ""}>
-              <button type="button" onClick={() => openNote(note.id)}>
-                <span className="title">{renderHighlighted(note.title, query)}</span>
-                {note.pinned && <span title="Pinned">📌</span>}
-                <span className="muted">{new Date(note.updatedAt).toLocaleDateString()}</span>
-              </button>
-            </li>
-          ))}
-          {visibleNotes.length === 0 && <li className="muted">No notes match.</li>}
-        </ul>
-      </section>
-
-      <section className="pane editor">
-        {draft ? (
-          <>
-            <input
-              className="note-title"
-              value={draft.title}
-              aria-label="Note title"
-              onChange={(event) => setDraft({ ...draft, title: event.target.value })}
-            />
-            {preview ? (
-              <MarkdownPreview
-                title={draft.title}
-                body={draft.body}
-                urlForAttachment={(id) => {
-                  void attachmentVersion;
-                  return attachmentUrls?.get(id) ?? null;
-                }}
+            {panelView === "folders" && (
+              <FolderTree
+                nodes={folderTree}
+                rows={folderRows}
+                selectedId={selectedFolderId}
+                onSelect={setSelectedFolderId}
+                onCreate={(parentId, name) => void organisationActions.createFolder(parentId, name)}
+                onRename={(id, name) => void organisationActions.renameFolder(id, name)}
+                onMove={(id, parentId) => void organisationActions.moveFolder(id, parentId)}
+                onDelete={(id) => void organisationActions.deleteFolder(id)}
               />
-            ) : (
-              <div
-                className="editor-host"
-                data-note-id={draft.id}
-                onPaste={handlePaste}
-                onDrop={handleDrop}
-                onDragOver={(event) => event.preventDefault()}
-              >
-                <LazyEditor
-                  key={draft.id}
-                  mode={editorMode}
+            )}
+
+            {panelView === "tags" && (
+              <TagList
+                tags={tagList}
+                selectedId={selectedTagId}
+                onSelect={setSelectedTagId}
+                onCreate={(name) => void organisationActions.createTag(name)}
+                onRename={(id, name) => void organisationActions.renameTag(id, name)}
+                onDelete={(id) => void organisationActions.deleteTag(id)}
+              />
+            )}
+
+            {panelView === "sync" && (
+              <section className="sync-status">
+                <h2>Sync</h2>
+                <button type="button" onClick={() => void scheduler.current?.syncNow()}>
+                  <Icon name="sync" size={14} />
+                  Sync now
+                </button>
+                {conflictCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const open = await listLocalConflicts(db);
+                      const first = open.find((entry) => entry.objectType === "note");
+                      if (first) {
+                        setResolvingConflict(first.objectId);
+                      }
+                    }}
+                  >
+                    <Icon name="conflict" size={14} />
+                    Resolve a conflict
+                  </button>
+                )}
+                {exportReminder !== null && <p className="muted">{exportReminder}</p>}
+                {/* Repeated from the menus on purpose: it is the one thing only the user can do. */}
+                <p className="muted">
+                  Backups live in the File menu. Export everything writes a plaintext archive of
+                  your notes; Recovery package writes the key material needed to get back into this
+                  account.
+                </p>
+              </section>
+            )}
+          </aside>
+        )}
+
+        <section className="pane list">
+          <header>
+            <input
+              type="search"
+              placeholder="Search notes…"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              aria-label="Search notes"
+            />
+            <button
+              type="button"
+              onClick={() => setPaletteOpen(true)}
+              title={formatShortcut({
+                id: "command-palette",
+                key: "p",
+                ctrlOrMeta: true,
+                description: "",
+              })}
+            >
+              ⌘
+            </button>
+          </header>
+          <ul className="note-list">
+            {visibleNotes.map((note) => (
+              <li key={note.id} className={note.id === selectedId ? "selected" : ""}>
+                <button type="button" onClick={() => openNote(note.id)}>
+                  <span className="title">{renderHighlighted(note.title, query)}</span>
+                  {note.pinned && <span title="Pinned">📌</span>}
+                  <span className="muted">{new Date(note.updatedAt).toLocaleDateString()}</span>
+                </button>
+              </li>
+            ))}
+            {visibleNotes.length === 0 && <li className="muted">No notes match.</li>}
+          </ul>
+        </section>
+
+        <section className="pane editor">
+          {draft ? (
+            <>
+              <input
+                className="note-title"
+                value={draft.title}
+                aria-label="Note title"
+                onChange={(event) => setDraft({ ...draft, title: event.target.value })}
+              />
+              {preview ? (
+                <MarkdownPreview
+                  title={draft.title}
+                  body={draft.body}
                   urlForAttachment={(id) => {
                     void attachmentVersion;
                     return attachmentUrls?.get(id) ?? null;
                   }}
-                  attachmentVersion={attachmentVersion}
-                  value={draft.body}
-                  onChange={(body) =>
-                    setDraft((current) => (current ? { ...current, body } : current))
-                  }
                 />
-              </div>
-            )}
-            <NoteOrganisation
-              folders={folderRows}
-              tags={tagList}
-              folderId={notes.find((entry) => entry.note.id === draft.id)?.note.folderId ?? null}
-              tagIds={noteTagIds}
-              maxTags={MAX_TAGS_PER_NOTE}
-              onFolderChange={(folderId) => {
-                if (!db || !account) {
-                  return;
-                }
-                const local: LocalContext = {
-                  db,
-                  dek: account.dek,
-                  userId: account.userId,
-                  keyVersion: account.keyVersion,
-                };
-                void updateLocalNoteMetadata(local, { id: draft.id, folderId }).then(async () => {
-                  await refresh(db, account);
-                  scheduler.current?.scheduleAfterIdle();
-                });
-              }}
-              onTagsChange={(tagIds) => {
-                if (!db || !account) {
-                  return;
-                }
-                const local: LocalContext = {
-                  db,
-                  dek: account.dek,
-                  userId: account.userId,
-                  keyVersion: account.keyVersion,
-                };
-                const planned = planTagChange(noteTagIds, tagIds, MAX_TAGS_PER_NOTE);
-                setNoteTagIds(planned.next);
-                void setLocalNoteTags(local, { noteId: draft.id, tagIds: planned.next }).then(
-                  async () => {
-                    await loadOrganisation(local);
+              ) : (
+                <div
+                  className="editor-host"
+                  data-note-id={draft.id}
+                  onPaste={handlePaste}
+                  onDrop={handleDrop}
+                  onDragOver={(event) => event.preventDefault()}
+                >
+                  <LazyEditor
+                    key={draft.id}
+                    mode={editorMode}
+                    urlForAttachment={(id) => {
+                      void attachmentVersion;
+                      return attachmentUrls?.get(id) ?? null;
+                    }}
+                    attachmentVersion={attachmentVersion}
+                    value={draft.body}
+                    onChange={(body) =>
+                      setDraft((current) => (current ? { ...current, body } : current))
+                    }
+                  />
+                </div>
+              )}
+              <NoteOrganisation
+                folders={folderRows}
+                tags={tagList}
+                folderId={notes.find((entry) => entry.note.id === draft.id)?.note.folderId ?? null}
+                tagIds={noteTagIds}
+                maxTags={MAX_TAGS_PER_NOTE}
+                onFolderChange={(folderId) => {
+                  if (!db || !account) {
+                    return;
+                  }
+                  const local: LocalContext = {
+                    db,
+                    dek: account.dek,
+                    userId: account.userId,
+                    keyVersion: account.keyVersion,
+                  };
+                  void updateLocalNoteMetadata(local, { id: draft.id, folderId }).then(async () => {
+                    await refresh(db, account);
                     scheduler.current?.scheduleAfterIdle();
-                  },
-                );
-              }}
-            />
+                  });
+                }}
+                onTagsChange={(tagIds) => {
+                  if (!db || !account) {
+                    return;
+                  }
+                  const local: LocalContext = {
+                    db,
+                    dek: account.dek,
+                    userId: account.userId,
+                    keyVersion: account.keyVersion,
+                  };
+                  const planned = planTagChange(noteTagIds, tagIds, MAX_TAGS_PER_NOTE);
+                  setNoteTagIds(planned.next);
+                  void setLocalNoteTags(local, { noteId: draft.id, tagIds: planned.next }).then(
+                    async () => {
+                      await loadOrganisation(local);
+                      scheduler.current?.scheduleAfterIdle();
+                    },
+                  );
+                }}
+              />
 
-            {draftAttachments.length > 0 && (
-              <section className="attachments" aria-label="Attachments">
-                <h2>Attachments ({draftAttachments.length})</h2>
-                <ul>
-                  {draftAttachments.map((attachment) => (
-                    <li key={attachment.id}>
-                      <a
-                        // The endpoint serves ciphertext, so opening it hands the user an unreadable file: the
-                        // link points at the decrypted bytes once they have been read.
-                        href={
-                          attachmentUrls?.get(attachment.id) ??
-                          `${ATTACHMENT_URL_PREFIX}${attachment.id}/content`
-                        }
-                        target="_blank"
-                        rel="noreferrer"
-                        title={attachment.id}
-                      >
-                        {attachment.label.length > 0
-                          ? attachment.label
-                          : `${attachment.id.slice(0, 8)}…`}
-                      </a>
-                      <button
-                        type="button"
-                        onClick={() => removeAttachmentReference(attachment.id)}
-                      >
-                        Remove
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-                <p className="muted">
-                  Removing a reference schedules the encrypted object for deletion once nothing else
-                  uses it.
-                </p>
-              </section>
-            )}
-            <footer>
-              <button type="button" className="primary" onClick={() => void saveDraft()}>
-                Save (Ctrl+S)
-              </button>
-              <button type="button" onClick={() => setPreview((current) => !current)}>
-                {preview ? "Edit" : "Preview"}
-              </button>
-              <button
-                type="button"
-                disabled={preview}
-                onClick={() =>
-                  setEditorMode((mode) => {
-                    const next: EditorMode = mode === "wysiwyg" ? "source" : "wysiwyg";
-                    saveEditorMode(localStorage, next);
-                    return next;
-                  })
-                }
-              >
-                {editorMode === "wysiwyg" ? "Markdown source" : "WYSIWYG"}
-              </button>
-              <span className="muted">
-                {preview
-                  ? "Rendered through the sanitizer."
-                  : `Editing in ${editorMode === "wysiwyg" ? "WYSIWYG" : "Markdown source"} mode, stored encrypted and queued for sync.`}
-              </span>
-            </footer>
-          </>
-        ) : (
-          <p className="muted">Select a note, or create one.</p>
-        )}
-      </section>
-
-      {message && (
-        <div className="toast" role="status">
-          {message}
-          <button type="button" onClick={() => setMessage(null)}>
-            Dismiss
-          </button>
-        </div>
-      )}
-
-      {mustRebind && account && (
-        <RebindTotpPrompt
-          account={account}
-          onFinished={async (notice) => {
-            setMustRebind(false);
-            // Every session was revoked by the server, so the app must authenticate again.
-            await lockAndForget("signed-out");
-            setMessage(notice);
-          }}
-          onLater={() => setMustRebind(false)}
-        />
-      )}
-
-      {importPrompt && (
-        <div className="palette conflict-panel" role="dialog" aria-label="Import an archive">
-          <h2>Import an archive</h2>
-          <p className="muted">
-            {importPrompt.collisions === 0
-              ? `${importPrompt.archive.notes.length} note(s) will be added. Nothing here has the same id.`
-              : `${importPrompt.collisions} item(s) in this archive already exist here. Merge keeps the newer text and adds tags; importing as copies gives everything in the archive new ids and leaves what is here untouched.`}
-          </p>
-          <button
-            type="button"
-            className="primary"
-            disabled={importing}
-            onClick={() => void runImport("merge")}
-          >
-            Merge
-          </button>
-          <button type="button" disabled={importing} onClick={() => void runImport("remap")}>
-            Import as copies
-          </button>
-          <button type="button" disabled={importing} onClick={() => setImportPrompt(null)}>
-            Cancel
-          </button>
-        </div>
-      )}
-
-      {resolvingConflict && account && (
-        <ConflictPanel
-          db={db}
-          account={account}
-          objectId={resolvingConflict}
-          onResolved={async () => {
-            // The resolution already reached the server by the time this runs, so the interface can be
-            // corrected from the local database immediately rather than waiting for the next pass: the
-            // marker is cleared, the count follows from it, and the note is no longer paused.
-            await refresh(db, account);
-            setConflictCount((await listLocalConflicts(db)).length);
-            setSyncState("synced");
-            scheduler.current?.scheduleAfterIdle();
-          }}
-          onClose={() => setResolvingConflict(null)}
-        />
-      )}
-
-      {pastePrompt && (
-        <div className="palette" role="dialog" aria-label="Paste rich text">
-          <p>This paste came from a web page. How should it be inserted?</p>
-          <button
-            type="button"
-            onClick={() => {
-              setRichTextPreference("plain");
-              saveRichTextPreference(localStorage, "plain");
-              insertIntoDraft(pastePrompt.text);
-              setPastePrompt(null);
-            }}
-          >
-            Plain text
-          </button>
-          <button
-            type="button"
-            className="primary"
-            onClick={() => {
-              void applyRichText(pastePrompt.html, true);
-              setPastePrompt(null);
-            }}
-          >
-            Keep formatting
-          </button>
-          <button type="button" onClick={() => setPastePrompt(null)}>
-            Cancel
-          </button>
-        </div>
-      )}
-
-      {paletteOpen && (
-        <div className="palette" role="dialog" aria-label="Command palette">
-          <input
-            autoFocus
-            value={paletteQuery}
-            placeholder="Type a command…"
-            aria-label="Command"
-            onChange={(event) => setPaletteQuery(event.target.value)}
-          />
-          <ul>
-            {filterCommands(commands, paletteQuery).map((command) => (
-              <li key={command.id}>
+              {draftAttachments.length > 0 && (
+                <section className="attachments" aria-label="Attachments">
+                  <h2>Attachments ({draftAttachments.length})</h2>
+                  <ul>
+                    {draftAttachments.map((attachment) => (
+                      <li key={attachment.id}>
+                        <a
+                          // The endpoint serves ciphertext, so opening it hands the user an unreadable file: the
+                          // link points at the decrypted bytes once they have been read.
+                          href={
+                            attachmentUrls?.get(attachment.id) ??
+                            `${ATTACHMENT_URL_PREFIX}${attachment.id}/content`
+                          }
+                          target="_blank"
+                          rel="noreferrer"
+                          title={attachment.id}
+                        >
+                          {attachment.label.length > 0
+                            ? attachment.label
+                            : `${attachment.id.slice(0, 8)}…`}
+                        </a>
+                        <button
+                          type="button"
+                          onClick={() => removeAttachmentReference(attachment.id)}
+                        >
+                          Remove
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="muted">
+                    Removing a reference schedules the encrypted object for deletion once nothing
+                    else uses it.
+                  </p>
+                </section>
+              )}
+              <footer>
+                <button type="button" className="primary" onClick={() => void saveDraft()}>
+                  Save (Ctrl+S)
+                </button>
+                <button type="button" onClick={() => setPreview((current) => !current)}>
+                  {preview ? "Edit" : "Preview"}
+                </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    setPaletteOpen(false);
-                    command.run?.();
-                  }}
+                  disabled={preview}
+                  onClick={() =>
+                    setEditorMode((mode) => {
+                      const next: EditorMode = mode === "wysiwyg" ? "source" : "wysiwyg";
+                      saveEditorMode(localStorage, next);
+                      return next;
+                    })
+                  }
                 >
-                  {command.label}
+                  {editorMode === "wysiwyg" ? "Markdown source" : "WYSIWYG"}
                 </button>
-              </li>
-            ))}
-          </ul>
-        </div>
+                <span className="muted">
+                  {preview
+                    ? "Rendered through the sanitizer."
+                    : `Editing in ${editorMode === "wysiwyg" ? "WYSIWYG" : "Markdown source"} mode, stored encrypted and queued for sync.`}
+                </span>
+              </footer>
+            </>
+          ) : (
+            <p className="muted">Select a note, or create one.</p>
+          )}
+        </section>
+
+        {message && (
+          <div className="toast" role="status">
+            {message}
+            <button type="button" onClick={() => setMessage(null)}>
+              Dismiss
+            </button>
+          </div>
+        )}
+
+        {mustRebind && account && (
+          <RebindTotpPrompt
+            account={account}
+            onFinished={async (notice) => {
+              setMustRebind(false);
+              // Every session was revoked by the server, so the app must authenticate again.
+              await lockAndForget("signed-out");
+              setMessage(notice);
+            }}
+            onLater={() => setMustRebind(false)}
+          />
+        )}
+
+        {importPrompt && (
+          <div className="palette conflict-panel" role="dialog" aria-label="Import an archive">
+            <h2>Import an archive</h2>
+            <p className="muted">
+              {importPrompt.collisions === 0
+                ? `${importPrompt.archive.notes.length} note(s) will be added. Nothing here has the same id.`
+                : `${importPrompt.collisions} item(s) in this archive already exist here. Merge keeps the newer text and adds tags; importing as copies gives everything in the archive new ids and leaves what is here untouched.`}
+            </p>
+            <button
+              type="button"
+              className="primary"
+              disabled={importing}
+              onClick={() => void runImport("merge")}
+            >
+              Merge
+            </button>
+            <button type="button" disabled={importing} onClick={() => void runImport("remap")}>
+              Import as copies
+            </button>
+            <button type="button" disabled={importing} onClick={() => setImportPrompt(null)}>
+              Cancel
+            </button>
+          </div>
+        )}
+
+        {resolvingConflict && account && (
+          <ConflictPanel
+            db={db}
+            account={account}
+            objectId={resolvingConflict}
+            onResolved={async () => {
+              // The resolution already reached the server by the time this runs, so the interface can be
+              // corrected from the local database immediately rather than waiting for the next pass: the
+              // marker is cleared, the count follows from it, and the note is no longer paused.
+              await refresh(db, account);
+              setConflictCount((await listLocalConflicts(db)).length);
+              setSyncState("synced");
+              scheduler.current?.scheduleAfterIdle();
+            }}
+            onClose={() => setResolvingConflict(null)}
+          />
+        )}
+
+        {pastePrompt && (
+          <div className="palette" role="dialog" aria-label="Paste rich text">
+            <p>This paste came from a web page. How should it be inserted?</p>
+            <button
+              type="button"
+              onClick={() => {
+                setRichTextPreference("plain");
+                saveRichTextPreference(localStorage, "plain");
+                insertIntoDraft(pastePrompt.text);
+                setPastePrompt(null);
+              }}
+            >
+              Plain text
+            </button>
+            <button
+              type="button"
+              className="primary"
+              onClick={() => {
+                void applyRichText(pastePrompt.html, true);
+                setPastePrompt(null);
+              }}
+            >
+              Keep formatting
+            </button>
+            <button type="button" onClick={() => setPastePrompt(null)}>
+              Cancel
+            </button>
+          </div>
+        )}
+
+        {paletteOpen && (
+          <div className="palette" role="dialog" aria-label="Command palette">
+            <input
+              autoFocus
+              value={paletteQuery}
+              placeholder="Type a command…"
+              aria-label="Command"
+              onChange={(event) => setPaletteQuery(event.target.value)}
+            />
+            <ul>
+              {filterCommands(commands, paletteQuery).map((command) => (
+                <li key={command.id}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPaletteOpen(false);
+                      command.run?.();
+                    }}
+                  >
+                    {command.label}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </main>
+
+      <StatusBar
+        exportReminder={exportReminder}
+        syncLabel={SYNC_STATE_LABELS[syncState]}
+        syncTone={
+          conflictCount > 0
+            ? "attention"
+            : syncState === "syncing"
+              ? "busy"
+              : syncState === "synced"
+                ? "ok"
+                : "attention"
+        }
+        conflictCount={conflictCount}
+        noteCount={notes.filter((entry) => entry.note.deletedAt === null).length}
+        version={__APP_VERSION__}
+        onOpenSync={() => {
+          setPanelView("sync");
+          setSidebarVisible(true);
+        }}
+        onOpenConflicts={async () => {
+          const open = await listLocalConflicts(db);
+          const first = open.find((entry) => entry.objectType === "note");
+          if (first) {
+            setResolvingConflict(first.objectId);
+          }
+        }}
+      />
+
+      {/* Hidden, and kept in the document so the File menu item is an ordinary action and the input keeps the label
+          that a screen reader and the tests both use. */}
+      <input
+        ref={importInput}
+        type="file"
+        accept=".zip,application/zip"
+        aria-label="Import an archive"
+        className="visually-hidden"
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          event.target.value = "";
+          if (file) {
+            void chooseImport(file);
+          }
+        }}
+      />
+
+      {settingsOpen && (
+        <SettingsDialog
+          theme={theme}
+          onTheme={chooseTheme}
+          sortKey={sortKey}
+          onSortKey={setSortKey}
+          version={__APP_VERSION__}
+          onClose={() => setSettingsOpen(false)}
+        />
       )}
-    </main>
+    </div>
   );
 }
 

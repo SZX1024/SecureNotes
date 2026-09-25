@@ -40,6 +40,32 @@ async function waitForQuiet(page, timeoutMs = 30_000) {
   return "timed out";
 }
 
+/**
+ * Opens a side panel from the activity rail.
+ *
+ * Idempotent, because clicking the view that is already showing collapses the panel: asking for the same view
+ * twice must leave it open rather than toggle it away.
+ */
+async function openPanel(target, label) {
+  const showing = await target.evaluate((wanted) => {
+    const button = [...document.querySelectorAll(".rail button")].find(
+      (candidate) => candidate.getAttribute("aria-label") === wanted,
+    );
+    return button?.getAttribute("aria-pressed") === "true";
+  }, label);
+  if (!showing) {
+    await target.getByRole("button", { name: label, exact: true }).click();
+  }
+  await target.waitForTimeout(300);
+}
+
+/** Runs a File-menu item by its label, the way a person would. */
+async function openFileMenuItem(target, label) {
+  await target.getByRole("button", { name: "File", exact: true }).click();
+  await target.getByRole("menuitem", { name: label }).click();
+  await target.waitForTimeout(300);
+}
+
 /** RFC 6238, so the run can sign in without reaching into anyone's database. */
 function totpFromBase32(secret) {
   if (!secret) {
@@ -353,6 +379,7 @@ try {
   check("the note decrypts after a recovery login", /文本与结构|Markdown|Untitled/.test(decrypted));
 
   // 8. Sync (§16): the saved note reaches the server, and a second device pulls it back.
+  await openPanel(page, "Sync and backup");
   await page.getByRole("button", { name: "Sync now", exact: true }).click();
   await page.waitForTimeout(4000);
 
@@ -422,6 +449,7 @@ try {
       await secondPage.keyboard.insertText("\n\nsecond device edit\n");
       await secondPage.getByRole("button", { name: /save/i }).click();
       await secondPage.waitForTimeout(1200);
+      await openPanel(secondPage, "Sync and backup");
       await secondPage.getByRole("button", { name: "Sync now", exact: true }).click();
       // Quiet before reading the revision: the second device's idle sync must not land mid-check.
       check(
@@ -451,6 +479,7 @@ try {
       await page.keyboard.insertText("\n\nfirst device edit\n");
       await page.getByRole("button", { name: /save/i }).click();
       await page.waitForTimeout(1200);
+      await openPanel(page, "Sync and backup");
       await page.getByRole("button", { name: "Sync now", exact: true }).click();
       // The stale edit is retried until it conflicts, so wait for the conflict rather than for a duration.
       await page
@@ -593,6 +622,7 @@ try {
 
   // 10. Organisation (§9, §10): folders, tags, the filters built from them, and the server receiving them.
   await waitForQuiet(page);
+  await openPanel(page, "Folders");
   await page.getByLabel("New folder name").fill("Work");
   await page.getByRole("button", { name: "Add folder" }).click();
   await page.waitForTimeout(1500);
@@ -620,6 +650,7 @@ try {
   check("the folder filter shows the note (§10)", inFolder >= 1, `${inFolder} note(s)`);
 
   // A tag, and the note carrying it.
+  await openPanel(page, "Tags");
   await page.getByLabel("New tag name").fill("urgent");
   await page.getByRole("button", { name: "Add tag" }).click();
   await page.waitForTimeout(1500);
@@ -638,6 +669,7 @@ try {
 
   // A folder that still holds a note is not deleted: the server would refuse, so the interface refuses first
   // rather than letting the folder reappear on the next pull.
+  await openPanel(page, "Folders");
   await page.getByRole("button", { name: "Delete folder Work" }).click();
   await page.waitForTimeout(1000);
   const refusal = await page.evaluate(() => document.body.innerText);
@@ -649,6 +681,7 @@ try {
   // And the organisation reaches the server. Whether a pass runs at all decides where a failure lies, so
   // record what the click produces instead of waiting a fixed time and inspecting the server afterwards.
   const callsBefore = noteCalls.length;
+  await openPanel(page, "Sync and backup");
   const syncButton = page.getByRole("button", { name: "Sync now", exact: true });
   check("the sync control is available", await syncButton.isEnabled());
   await syncButton.click();
@@ -694,6 +727,7 @@ try {
   // 9b. Pasting and dropping an image (§12). This is the path a user actually takes and it had no end-to-end
   // coverage at all: the rules were unit-tested, the wiring was not. The events are dispatched on the element
   // the editor owns and they bubble like real ones, so an editor that swallowed them would fail here.
+  await openPanel(page, "Notes");
   await page.getByRole("button", { name: "New note", exact: true }).first().click();
   await page.waitForTimeout(3000);
 
@@ -879,7 +913,7 @@ try {
     reminderBefore.trim(),
   );
 
-  await page.getByRole("button", { name: /export everything/i }).click();
+  await openFileMenuItem(page, /Export everything/);
   const exportDeadline = Date.now() + 40_000;
   while (Date.now() < exportDeadline && downloaded.length === 0) {
     await page.waitForTimeout(500);
@@ -1085,6 +1119,7 @@ print(json.dumps({"names": names, "format": manifest["format"], "version": manif
 
     await context.setOffline(false);
     const callsBeforeOfflineUpload = noteCalls.length;
+    await openPanel(page, "Sync and backup");
     await page.getByRole("button", { name: "Sync now", exact: true }).click();
     const uploadDeadline = Date.now() + 40_000;
     let uploaded = false;
@@ -1119,7 +1154,7 @@ print(json.dumps({"names": names, "format": manifest["format"], "version": manif
     };
     page.on("download", onRecoveryDownload);
 
-    await page.getByRole("button", { name: "Recovery package", exact: true }).click();
+    await openFileMenuItem(page, /Recovery package/);
     const recoveryDeadline = Date.now() + 30_000;
     while (Date.now() < recoveryDeadline && recoveryDownload.length === 0) {
       await page.waitForTimeout(500);
@@ -1199,6 +1234,51 @@ print(json.dumps({
   );
   diagnostics.push(
     `ATT LOGS: ${JSON.stringify(appLogs.filter((line) => line.includes("[att]")).slice(-6))}`,
+  );
+
+  // 11b. The frame (§22): the rail, the menus, the settings dialog and the status bar.
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.waitForSelector('[role="dialog"][aria-label="Settings"]', { timeout: 20_000 });
+  const settings = await page.evaluate(
+    () => document.querySelector('[role="dialog"][aria-label="Settings"]')?.textContent ?? "",
+  );
+  check(
+    "settings opens from the menu bar (§22)",
+    /Appearance/.test(settings),
+    settings.slice(0, 60),
+  );
+
+  // One control per setting: the theme used to offer a selector and a cycling button for the same value.
+  const themeChoices = await page.getByRole("radio").count();
+  check(
+    "the theme is one control with three choices (§22)",
+    themeChoices === 3,
+    `${themeChoices} choices`,
+  );
+
+  await page.getByRole("radio", { name: "Dark" }).click();
+  await page.waitForTimeout(600);
+  const resolved = await page.evaluate(() => document.documentElement.dataset.theme ?? "");
+  check("choosing a theme applies it (§22)", resolved === "dark", resolved);
+  await page.getByRole("radio", { name: "System" }).click();
+  await page.getByRole("button", { name: "Close settings" }).click();
+  await page.waitForTimeout(400);
+
+  // `Alt` plus the menu's letter, which is how a menu bar has always been reached without a mouse.
+  await page.keyboard.press("Alt+f");
+  await page.waitForTimeout(400);
+  const menuOpen = await page.evaluate(() => Boolean(document.querySelector('[role="menu"]')));
+  check("Alt+F opens the File menu (§22)", menuOpen);
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(300);
+
+  const statusBar = await page.evaluate(
+    () => document.querySelector(".status-bar")?.textContent ?? "",
+  );
+  check(
+    "the status bar states the version and that content is encrypted (§22)",
+    /v\d+\.\d+\.\d+/.test(statusBar) && /Encrypted/.test(statusBar),
+    statusBar.slice(0, 80),
   );
 
   // 10. Replace the authenticator from the recovery session (§3), then sign in with the new one. The
