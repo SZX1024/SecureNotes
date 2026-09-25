@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import { canMoveFolder, type FolderNode, type FolderRow } from "../data/organisation";
+import { Icon } from "./Icon";
 
 /**
  * Organisation controls: the folder tree, the tag list and a note's own placement (§9, §10).
@@ -86,7 +87,7 @@ export function FolderTree({
             aria-label={`Rename folder ${node.name}`}
             onClick={() => setRenaming(node.id)}
           >
-            ✎
+            <Icon name="rename" />
           </button>
           <button
             type="button"
@@ -96,14 +97,14 @@ export function FolderTree({
               setNewFolderName("");
             }}
           >
-            ＋
+            <Icon name="add" />
           </button>
           <button
             type="button"
             aria-label={`Delete folder ${node.name}`}
             onClick={() => onDelete(node.id)}
           >
-            ✕
+            <Icon name="remove" />
           </button>
         </div>
         {newFolderParent === node.id && (
@@ -258,14 +259,14 @@ export function TagList({
               aria-label={`Rename tag ${tag.name}`}
               onClick={() => setRenaming(tag.id)}
             >
-              ✎
+              <Icon name="rename" />
             </button>
             <button
               type="button"
               aria-label={`Delete tag ${tag.name}`}
               onClick={() => onDelete(tag.id)}
             >
-              ✕
+              <Icon name="remove" />
             </button>
           </li>
         ))}

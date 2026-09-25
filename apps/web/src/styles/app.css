@@ -1,24 +1,17 @@
-/* Application shell (§22). Deliberately plain: the layout and the interaction
-   matter here, the visual language is refined once the editor lands in P6. */
+/* Application shell (§22).
+ *
+ * The design foundation — palette, type, spacing, shape, focus — lives in tokens.css and is imported below, so this
+ * file only says how the interface is put together. */
 
-:root {
-  color-scheme: light dark;
-  --border: color-mix(in srgb, currentColor 20%, transparent);
-  --muted: color-mix(in srgb, currentColor 60%, transparent);
-}
-
-body {
-  margin: 0;
-  font-family: system-ui, sans-serif;
-}
+@import "./tokens.css";
 
 .muted {
+  font-size: var(--text-sm);
   color: var(--muted);
-  font-size: 0.85rem;
 }
 
 .error {
-  color: #b3261e;
+  color: var(--danger);
 }
 
 .boot,
@@ -51,22 +44,44 @@ body {
 
 .shell {
   display: grid;
-  grid-template-columns: 16rem 20rem 1fr;
+  grid-template-columns: var(--panel-width) var(--list-width) 1fr;
   height: 100vh;
+  background: var(--bg);
 }
 
 .shell.sidebar-hidden {
-  grid-template-columns: 20rem 1fr;
+  grid-template-columns: var(--list-width) 1fr;
 }
 
 .pane {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: var(--space-4);
   min-width: 0;
-  padding: 0.75rem;
-  border-right: 1px solid var(--border);
+  padding: var(--space-4) var(--space-5);
   overflow: auto;
+  /* Secondary panes sit on the elevated surface; the editor keeps the base one. Two surfaces, no shadows. */
+  background: var(--bg-elevated);
+  border-right: 1px solid var(--border);
+}
+
+.pane.editor {
+  background: var(--bg);
+  border-right: 0;
+}
+
+/* Section headings read as labels rather than as prose: the single change that makes a long sidebar scannable. */
+.pane h2 {
+  margin: var(--space-5) 0 var(--space-1);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.pane h2:first-of-type {
+  margin-top: 0;
 }
 
 .pane header {
@@ -88,20 +103,32 @@ body {
 
 .note-list button {
   display: flex;
-  gap: 0.5rem;
+  gap: var(--space-4);
+  align-items: baseline;
   width: 100%;
-  padding: 0.5rem;
+  min-height: var(--row-height);
+  padding: var(--space-3) var(--space-4);
   text-align: left;
+  color: inherit;
   background: none;
   border: 1px solid transparent;
-  border-radius: 0.4rem;
-  cursor: pointer;
+  border-radius: var(--radius-sm);
 }
 
-.note-list li.selected button,
 .note-list button:hover {
-  border-color: var(--border);
-  background: color-mix(in srgb, currentColor 8%, transparent);
+  background: var(--bg-hover);
+  border-color: transparent;
+}
+
+/* The accent marks where the user is; nothing else in the list uses it. */
+.note-list li.selected button {
+  background: var(--bg-selected);
+  border-color: transparent;
+}
+
+.note-list time {
+  font-size: var(--text-xs);
+  color: var(--muted);
 }
 
 .note-list .title {
@@ -112,8 +139,8 @@ body {
 }
 
 mark.hit {
-  background: color-mix(in srgb, gold 60%, transparent);
   color: inherit;
+  background: var(--selection);
 }
 
 .note-title {
@@ -134,12 +161,68 @@ mark.hit {
   align-items: center;
 }
 
+button {
+  display: inline-flex;
+  gap: var(--space-3);
+  align-items: center;
+  justify-content: center;
+  min-height: var(--control-height);
+  padding: 0 var(--space-4);
+  font-size: var(--text-ui);
+  color: var(--text);
+  background: var(--bg-active);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+button:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+button:disabled {
+  color: var(--muted);
+  cursor: default;
+  opacity: 0.6;
+}
+
 button.primary {
-  padding: 0.4rem 0.75rem;
-  border-radius: 0.4rem;
+  color: var(--accent-text);
+  background: var(--accent);
+}
+
+button.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: transparent;
+}
+
+/* A control whose only content is an icon: square, and quiet until it is pointed at. */
+button:has(> svg:only-child) {
+  padding: 0 var(--space-3);
+  background: transparent;
+}
+
+button:has(> svg:only-child):hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+input,
+select,
+textarea {
+  min-height: var(--control-height);
+  padding: 0 var(--space-3);
+  background: var(--bg-input);
   border: 1px solid var(--border);
-  background: color-mix(in srgb, currentColor 12%, transparent);
-  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--focus);
 }
 
 .toast {
@@ -255,19 +338,8 @@ button.primary {
   border: 1px solid var(--border);
 }
 
-/* Theme (§ requirements): an explicit choice wins over the system, applied by the
-   shell as a data attribute so the resolution rule stays in one tested function. */
-:root[data-theme="light"] {
-  color-scheme: light;
-  --border: rgb(0 0 0 / 15%);
-  --muted: rgb(0 0 0 / 60%);
-}
-
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --border: rgb(255 255 255 / 22%);
-  --muted: rgb(255 255 255 / 65%);
-}
+/* Theme: an explicit choice wins over the system, applied by the shell as a data attribute so the resolution rule
+ * stays in one tested function. The values themselves are in tokens.css. */
 
 /* Mobile layout (§22: a separate layout, not a shrunken desktop).
 
