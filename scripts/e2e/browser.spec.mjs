@@ -5,8 +5,12 @@
  * secret from anyone's database: a fresh persistence directory means the app opens on its first-run
  * screen, and the authenticator URI it displays is read straight out of the page.
  */
+import { execFileSync } from "node:child_process";
 import { createHmac } from "node:crypto";
+import { mkdtempSync } from "node:fs";
 import { readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { chromium } from "playwright-core";
 
 const ROOT = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
@@ -850,6 +854,84 @@ try {
   diagnostics.push(
     `WYSIWYG IMAGES: ${JSON.stringify(inEditor)} STATE: ${JSON.stringify(editorState)}`,
   );
+  // 9c. Export (§20). The archive is downloaded as a real ZIP, and the check is not "a file was produced": the
+  // bytes are validated afterwards by an independent unzip implementation, which is the only way to know the
+  // export is readable by something that has never heard of this application.
+  const downloadDirectory = mkdtempSync(join(tmpdir(), "securenotes-export-"));
+  let downloaded = "";
+  page.on("download", async (download) => {
+    downloaded = join(downloadDirectory, download.suggestedFilename());
+    await download.saveAs(downloaded);
+  });
+
+  const reminderBefore = await page.evaluate(
+    () => document.querySelector('[data-testid="export-reminder"]')?.textContent ?? "",
+  );
+  check(
+    "the interface says when a backup is overdue (§20)",
+    /not exported|days ago/i.test(reminderBefore),
+    reminderBefore.trim(),
+  );
+
+  await page.getByRole("button", { name: /export everything/i }).click();
+  const exportDeadline = Date.now() + 40_000;
+  while (Date.now() < exportDeadline && downloaded.length === 0) {
+    await page.waitForTimeout(500);
+  }
+  diagnostics.push(`EXPORT: ${downloaded}`);
+  check("exporting produces a download (§20)", downloaded.length > 0, downloaded);
+
+  if (downloaded.length > 0) {
+    // An independent reader: if Python's zipfile can list and extract this, so can the user's tools.
+    const listing = execFileSync("python3", [
+      "-c",
+      `import json,zipfile,sys
+z = zipfile.ZipFile(sys.argv[1])
+names = z.namelist()
+manifest = json.loads(z.read("manifest.json"))
+notes = [n for n in names if n.startswith("notes/") and n.endswith(".md")]
+print(json.dumps({"names": names, "format": manifest["format"], "version": manifest["formatVersion"],
+                  "encryption": manifest["encryption"], "notes": len(notes),
+                  "firstNote": z.read(sorted(notes)[0]).decode()[:200] if notes else ""}))`,
+      downloaded,
+    ]).toString();
+    const report = JSON.parse(listing);
+    diagnostics.push(
+      `EXPORT REPORT: ${JSON.stringify({ ...report, firstNote: report.firstNote.slice(0, 40) })}`,
+    );
+    check(
+      "the archive is a readable ZIP (§20)",
+      report.names.includes("manifest.json"),
+      JSON.stringify(report.names.slice(0, 6)),
+    );
+    check(
+      "it is a SecureNotes export (§20)",
+      report.format === "securenotes-export" && report.version === 1,
+    );
+    check("it states that it is plaintext (§20)", report.encryption === "none");
+    check(
+      "it carries the notes as Markdown (§20)",
+      report.notes >= 1 && report.firstNote.startsWith("#"),
+      report.firstNote.slice(0, 40),
+    );
+    check(
+      "it carries the attachment content (§20)",
+      report.names.some((name) => name.startsWith("attachments/")),
+      JSON.stringify(report.names.filter((name) => name.startsWith("attachments/"))),
+    );
+
+    // §20: the reminder is measured from the export that just happened.
+    await page.waitForTimeout(2000);
+    const reminderAfter = await page.evaluate(
+      () => document.querySelector('[data-testid="export-reminder"]')?.textContent ?? null,
+    );
+    check(
+      "the reminder clears after an export (§20)",
+      reminderAfter === null,
+      String(reminderAfter),
+    );
+  }
+
   check(
     "the image is displayed in the visual editor (§12)",
     inEditor.some((image) => image.src.startsWith("blob:") && image.width > 0),

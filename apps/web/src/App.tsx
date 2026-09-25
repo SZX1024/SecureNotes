@@ -67,8 +67,18 @@ import { uploadAttachment } from "./data/attachments-client";
 import {
   attachmentIdsInHtml,
   createAttachmentUrls,
+  fetchAttachment,
   rewriteAttachmentUrls,
 } from "./data/attachment-content";
+import { buildExportArchive } from "./export/archive";
+import {
+  LAST_EXPORT_KEY,
+  collectExportSources,
+  daysSinceExport,
+  exportFileName,
+  readLocalAttachmentNames,
+  shouldRemindExport,
+} from "./export/collect";
 import {
   ATTACHMENT_URL_PREFIX,
   attachmentReferencesIn,
@@ -161,6 +171,10 @@ export function App() {
   const [tagLinks, setTagLinks] = useState<Map<string, string[]>>(new Map());
   /** Blob URLs for the attachments a preview shows, and a version that changes when one becomes ready. */
   const [attachmentVersion, setAttachmentVersion] = useState(0);
+  /** When the notes were last exported, and whether an export is running (§20). */
+  /** The reminder's text, decided when the clock is read rather than while rendering. */
+  const [exportReminder, setExportReminder] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
   const scheduler = useRef<SyncScheduler | null>(null);
   /** The references the note had when it was opened, for the save-time diff. */
   const [openedRefs, setOpenedRefs] = useState<string[]>([]);
@@ -264,6 +278,16 @@ export function App() {
         keyVersion: unlocked.keyVersion,
       };
       await loadOrganisation(context);
+      const recorded = await database.meta.get(LAST_EXPORT_KEY);
+      const exportedAt = typeof recorded?.value === "number" ? recorded.value : null;
+      const sinceDays = daysSinceExport(exportedAt, Date.now());
+      setExportReminder(
+        shouldRemindExport(exportedAt, Date.now())
+          ? sinceDays === null
+            ? "You have not exported your notes yet. The only copy is the one in this browser."
+            : `Last export was ${sinceDays} days ago.`
+          : null,
+      );
       const stored = await readAllLocalNotes(context);
       setNotes(stored);
 
@@ -478,6 +502,67 @@ export function App() {
    * render's value — so the note appeared in the list but never opened, and the editor pane kept
    * saying "Select a note".
    */
+  /**
+   * Writes a complete plaintext archive and hands it to the browser (§20).
+   *
+   * The archive is assembled in memory and never touches browser storage: the only thing that is recorded is
+   * when the export happened, which is what the reminder is measured from. §20 asks for temporary export data to
+   * be cleaned up after an export, and the simplest way to be sure of that is to have none — the object URL the
+   * download uses is revoked as soon as the click has been dispatched.
+   */
+  const exportEverything = useCallback(async () => {
+    if (!db || !account) {
+      return;
+    }
+    setExporting(true);
+    try {
+      const context: LocalContext = {
+        db,
+        dek: account.dek,
+        userId: account.userId,
+        keyVersion: account.keyVersion,
+      };
+      const sources = await collectExportSources(db);
+      const names = await readLocalAttachmentNames(context);
+      const now = Date.now();
+
+      const { bytes } = await buildExportArchive(sources, {
+        dek: account.dek,
+        keyVersion: account.keyVersion,
+        now,
+        readAttachment: async (attachmentId) => {
+          const read = await fetchAttachment(account.dek, account.keyVersion, attachmentId);
+          return {
+            bytes: read.bytes,
+            contentType: read.contentType,
+            // The name the file was uploaded with; the reference's own label is the fallback, because an
+            // attachment can be referenced by a note whose text was written before the name was known.
+            filename: names.get(attachmentId) ?? attachmentId,
+          };
+        },
+      });
+
+      const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: "application/zip" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = exportFileName(now);
+      document.body.append(link);
+      link.click();
+      link.remove();
+      // Revoked immediately: the file is the user's copy now, and a live object URL would keep the whole archive
+      // in memory for as long as the page is open.
+      URL.revokeObjectURL(url);
+
+      await db.meta.put({ key: LAST_EXPORT_KEY, value: now });
+      setExportReminder(null);
+      setMessage(`Exported ${sources.notes.length} note(s) as a plaintext ZIP.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "The export failed.");
+    } finally {
+      setExporting(false);
+    }
+  }, [db, account]);
+
   /** The CRUD behind the folder tree and the tag list (§9, §10). */
   const organisationActions = useMemo(() => {
     const context = (): LocalContext | null =>
@@ -1064,6 +1149,18 @@ export function App() {
             <button type="button" onClick={() => void scheduler.current?.syncNow()}>
               Sync now
             </button>
+            <button
+              type="button"
+              onClick={() => void exportEverything()}
+              disabled={exporting || notes.length === 0}
+            >
+              {exporting ? "Exporting…" : "Export everything"}
+            </button>
+            {exportReminder !== null && (
+              <p className="muted" data-testid="export-reminder">
+                {exportReminder}
+              </p>
+            )}
             {conflictCount > 0 && (
               <button
                 type="button"

@@ -1421,7 +1421,6 @@ ok  the server accepted the attachment links (§12)         队列排空，服�
 诊断信息依旧只在失败时打印；本轮正是靠 `[att] failed … crypto_version must be a positive integer`
 与 `LINK STATE: {…, "attempts":[1,0]}` 这两条记录定位到真因的。
 
-
 ## 32. WYSIWYG 里的图片（同一条根因的第二处渲染路径）
 
 §31 修好的是**预览**。WYSIWYG 走的是**另一条管线**：Milkdown / ProseMirror 按 Markdown 里的地址自己渲染 `<img>`，
@@ -1446,3 +1445,48 @@ ok  the image is displayed in the visual editor (§12)        WYSIWYG：blob URL
 
 另外记录：模式切换按钮的标签是「**要切换到**的那个模式」，退出预览的按钮叫 **Edit**，
 而 `preview` 是**独立于模式**的状态（切模式不会退出预览）。我的测试最初就是在这两点上判断错的。
+
+
+## 33. P8（第 1 批）：归档格式与导出
+
+### 33.1 需求（§20）
+
+手动、**全量**、**明文 ZIP**，专用结构；导出后**清理临时数据**；**30 天未导出要提醒**；明文导出**在加密边界之外**；
+另有**独立**的恢复包（版本化、**不含明文 TOTP 密钥**）；导入必须**事务性**（先全量校验再提交，失败整体回滚），
+重复 id 需**用户选择**合并/重映射（禁止无条件覆盖）。
+
+### 33.2 交付
+
+| 文件 | 内容 |
+| --- | --- |
+| `src/export/zip.ts` | **自写 ZIP 读写**（不新增依赖）：CRC-32（表驱动）、DOS 时间、本地头/中央目录/EOCD；压缩用平台 `CompressionStream("deflate-raw")`，**不可用时退回 store**（两者都是合法 ZIP） |
+| `src/export/archive.ts` | 归档结构：`manifest.json`（含 `encryption: "none"`）、`notes.json`、`folders.json`、`tags.json`、`attachments.json`、`notes/<id>.md`、`attachments/<id>/<文件名>`，外加 `README.txt` **向人解释结构**；解析与**校验**（格式、版本、悬空引用）**完全不写库** |
+| `src/export/collect.ts` | 从本地库收集（**排除回收站**）、附件集合（取自笔记正文）、提醒判断与文件名 |
+| `App.tsx` | 「Export everything」按钮 + 下载 + 记录 `lastExportAt` + **30 天提醒** |
+
+**两个刻意的设计决定**：
+
+1. **归档只在内存中生成**，不落任何浏览器存储 —— §20 要求「导出后清理临时数据」，最可靠的做法是**根本没有临时数据**：
+   下载用的 object URL 在点击后立刻 `revoke`，库里只写一个 `lastExportAt`。
+2. **附件名取笔记里的 alt 标签**（用户看到的名字），而不是附件 id；没有附件行时也不至于导出一堆以 UUID 命名的文件。
+
+### 33.3 验证（E2E 68 项）
+
+导出这条链**用 Python 的 `zipfile` 独立校验**——不是「生成了文件」，而是**别的工具能读**：
+
+```text
+ok  the interface says when a backup is overdue (§20)     (You have not exported your notes yet…)
+ok  exporting produces a download (§20)                   securenotes-export-2026-09-25T12-30-32.zip
+ok  the archive is a readable ZIP (§20)
+ok  it is a SecureNotes export (§20) / states that it is plaintext (§20)
+ok  it carries the notes as Markdown (§20)
+ok  it carries the attachment content (§20)               …/pasted.png、…/dropped.png
+ok  the reminder clears after an export (§20)
+```
+
+`pnpm check` ✅ **593 测试**（31 + 338 + 224）。
+
+### 33.4 下一批
+
+**导入**：ZIP 解析（已有）→ 事务性提交（Dexie 单事务；失败回滚）、重复 id 的**合并/重映射**选择、导入后入队同步；
+随后是**恢复包**（独立、版本化、不含明文 TOTP）。
