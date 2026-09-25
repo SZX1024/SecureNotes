@@ -83,6 +83,8 @@ export interface CreateNoteInput {
   id: string;
   folderId: string | null;
   payload: CryptoEnvelope;
+  /** The revision the payload was encrypted under; defaults to 1. */
+  revision?: number;
   pinned?: boolean;
   sortOrder?: number;
 }
@@ -97,7 +99,9 @@ export async function createNote(
     await assertFolderExists(env, userId, input.folderId);
   }
 
-  const revision = 1;
+  // The client's revision, or 1 for a note that has never been saved locally. It is the client's number
+  // because the payload was encrypted with it in the AAD.
+  const revision = input.revision ?? 1;
 
   // The note, its first revision and the sync-feed entry are written together:
   // a note without its revision row would break the "current revision is also

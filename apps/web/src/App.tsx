@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ApiError, apiRequest } from "./api/client";
+import { applyRemote } from "./sync/apply";
+import { hasSessionCookie, isOnline, pullChanges, pushChange } from "./sync/client";
+import { listLocalConflicts, syncNow, type SyncState } from "./sync/engine";
+import { SyncScheduler, attachSyncTriggers } from "./sync/scheduler";
 import {
   beginTotpRebind,
   completeTotpRebind,
@@ -107,6 +111,10 @@ export function App() {
   const [pastePrompt, setPastePrompt] = useState<{ html: string; text: string } | null>(null);
   /** §3: a recovery login has no authenticator to return to, so it asks for a new one. */
   const [mustRebind, setMustRebind] = useState(false);
+  /** §17: the state the interface shows. */
+  const [syncState, setSyncState] = useState<SyncState>("synced");
+  const [conflictCount, setConflictCount] = useState(0);
+  const scheduler = useRef<SyncScheduler | null>(null);
   /** The references the note had when it was opened, for the save-time diff. */
   const [openedRefs, setOpenedRefs] = useState<string[]>([]);
   const [editorMode, setEditorMode] = useState<EditorMode>(() =>
@@ -191,6 +199,45 @@ export function App() {
     setMessage("Your session was revoked on another device. Sign in again.");
   }, [lockAndForget]);
 
+  /** Runs one sync pass and updates what the interface shows (§17). */
+  const runSyncPass = useCallback(async () => {
+    if (!db || !account) {
+      return;
+    }
+    // §17: report being offline rather than failing a pass, and do not spend a request on a session
+    // that has already gone.
+    if (!isOnline()) {
+      setSyncState("offline");
+      return;
+    }
+    if (!hasSessionCookie()) {
+      setSyncState("auth-required");
+      return;
+    }
+
+    const outcome = await syncNow({
+      db,
+      push: (change) => pushChange(db, change),
+      pull: (since) => pullChanges(since),
+      apply: applyRemote(db),
+    });
+
+    setConflictCount((await listLocalConflicts(db)).length);
+
+    if (outcome.stoppedBy === "auth") {
+      // §16: an authentication failure waits for the user rather than retrying forever.
+      setSyncState("auth-required");
+      return;
+    }
+
+    if (outcome.pulled > 0) {
+      // A pull writes straight into the local database, so the interface has to read it again — otherwise
+      // a second device downloads its notes and shows an empty list until the next login.
+      await refresh(db, account);
+    }
+    setSyncState(outcome.state);
+  }, [db, account, refresh]);
+
   const runRequest = useCallback(
     async <T,>(operation: () => Promise<T>): Promise<T | null> => {
       try {
@@ -249,6 +296,30 @@ export function App() {
     document.documentElement.style.colorScheme = resolved;
   }, [theme]);
 
+  // Sync triggers (§17): a pass on startup, five seconds after editing stops, on page resume and after
+  // network recovery. Everything is torn down when the app leaves the unlocked state, so a locked app
+  // neither syncs nor keeps listeners.
+  useEffect(() => {
+    if (screen !== "app" || !db || !account) {
+      return;
+    }
+
+    const instance = new SyncScheduler({ run: runSyncPass });
+    scheduler.current = instance;
+    const detach = attachSyncTriggers(instance);
+    // Startup pass; the browser reports network recovery through the same scheduler.
+    void instance.syncNow();
+    const onOnline = () => void instance.syncNow();
+    window.addEventListener("online", onOnline);
+
+    return () => {
+      window.removeEventListener("online", onOnline);
+      detach();
+      instance.stop();
+      scheduler.current = null;
+    };
+  }, [screen, db, account, runSyncPass]);
+
   // App Lock: check on an interval so a tab left open locks itself (§7).
   useEffect(() => {
     if (screen !== "app") {
@@ -296,6 +367,8 @@ export function App() {
     };
     await runRequest(async () => {
       await updateLocalNote(context, { id: draft.id, title: draft.title, body: draft.body });
+      // §17: about five seconds after the user stops editing.
+      scheduler.current?.scheduleAfterIdle();
       // §12 reference counting: the text decides. An attachment whose reference was
       // deleted loses its link, and the server enqueues it for deletion at zero.
       const currentRefs = attachmentRefsIn(draft.body);
@@ -706,6 +779,16 @@ export function App() {
               Recycle bin
             </button>
           </nav>
+          <section className="sync-status">
+            <h2>Sync</h2>
+            <p className="muted" data-testid="sync-state">
+              {SYNC_STATE_LABELS[syncState]}
+              {conflictCount > 0 ? ` · ${conflictCount} conflict(s)` : ""}
+            </p>
+            <button type="button" onClick={() => void scheduler.current?.syncNow()}>
+              Sync now
+            </button>
+          </section>
           <label className="field">
             <span>Theme</span>
             <select
@@ -961,6 +1044,17 @@ export function App() {
     </main>
   );
 }
+
+/** §17: what each sync state says. */
+const SYNC_STATE_LABELS: Record<SyncState, string> = {
+  synced: "Synced",
+  pending: "Pending changes",
+  syncing: "Syncing…",
+  conflict: "Conflict — needs a decision",
+  offline: "Offline",
+  "sync-error": "Sync error — press Sync now",
+  "auth-required": "Sign in again to sync",
+};
 
 /** Hosts whichever editor the mode selects, loading it on first use. */
 function LazyEditor({

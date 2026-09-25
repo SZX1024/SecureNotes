@@ -1193,3 +1193,40 @@ E2E_EMBED_URL=https://example.com pnpm e2e   # 换成无脚本的站点 → 23/2
 测试（`test/conflicts.test.ts`，9 项）：三方均保留且 local 不丢 · 反复重试只留一个未决冲突 ·
 keep local 写成新修订（revision 3）并关闭冲突 · **解决结果出现在变更流里** · keep remote 不写入任何东西 ·
 merged 写入 · **笔记再次变化时拒绝解决且冲突保持未决** · local/merged 缺 payload → 400 · 重复解决 → 412。
+
+## 26. P7 同步（第 3 批：客户端引擎 + 接线，已在真实浏览器验证）
+
+### 26.1 交付
+
+| 文件                    | 内容                                                                                                                              |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `src/sync/engine.ts`    | 压缩规则 · 指数退避 · §17 状态机 · 游标读写 · 本地冲突登记 · `syncNow` 编排（注入副作用，纯逻辑可测）                             |
+| `src/sync/apply.ts`     | 应用远端变更；**本地未上传的编辑永不被覆盖**（§16「delete-vs-modify 恒为冲突」）                                                  |
+| `src/sync/client.ts`    | 绑到真实 API：push 映射到 notes/folders/tags 的 create/patch/delete；401→auth、409→conflict、其余 4xx→交人处理、瞬时失败→退避重试 |
+| `src/sync/scheduler.ts` | §17 触发时机（启动 · 编辑停止 ~5 秒 · 页面恢复 · 网络恢复 · 手动 Sync Now），**并发触发合并为至多一次补跑**                       |
+| `App.tsx`               | 侧栏同步状态 + Sync Now；上锁时**彻底拆掉**调度器与监听                                                                           |
+
+**测试**：`engine.test.ts`（23）+ `scheduler.test.ts`（6）= 29 项，全部针对**规则本身**。
+
+### 26.2 E2E 逼出来的三个真实缺陷（都不是我推理出来的，是请求记录与断言暴露的）
+
+1. **冻结格式要求客户端拥有 revision**。AAD 把 revision 绑进密文，而服务端 create 一律写 revision 1 —— 于是「离线创建后编辑过」的笔记上传后，**其他设备解不开**（解不开的行会被**静默跳过**，所以表现是「笔记不见了」）。
+   修：create 接受**客户端的 revision**（`revision` 仅在 create 时发送；PATCH 的严格 schema 不接受它，多带一个字段会被判 400）。
+2. **压缩规则必须服从修订链**。我最初把「create + 多次 update」合并为一次 create，看似省事，实则把「第 3 次编辑的载荷」写成了服务端的第 1 个修订 → 其他设备解密失败。
+   现规则（可证安全）：首次为 **create** → 只上传该 create（它携带当前载荷与修订），该对象其余 create/update 条目**一并作废**，仅保留 delete；
+   首次为 **update** → 按队列顺序逐条上传（服务端每步 +1，与 AAD 同步）；末尾为 **delete** → 只发 delete；
+   create→delete 且从未上传 → **两条都丢弃**（服务端从未听说过该对象，单独发 delete 会是 404）。
+3. **拉取之后界面必须重新读取本地库**。同步把笔记写进 IndexedDB，而 React 状态只在登录/保存时刷新 —— 于是第二台设备「下载成功但列表为空」。
+   修：`syncNow` 报告 `pulled > 0` 时重新 `refresh`。
+
+### 26.3 E2E 现在 37 项，含跨设备证明
+
+```text
+ok  the saved note reached the server (§16)            推送成功
+ok  the second device pulled the note from the server (§16)   另一台设备拉取并解密成功
+ok  the interface reports a sync state (§17) (Synced)
+```
+
+第二台设备用**全新的浏览器上下文**（空 IndexedDB）登录，因此它显示的任何笔记都**只能来自服务端**。
+另外我在 E2E 里保留了 `/notes` 与 `/sync` 请求的记录并在失败时打印 —— 上面三个缺陷正是靠它定位的，
+不再靠猜。

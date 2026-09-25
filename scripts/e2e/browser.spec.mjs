@@ -76,6 +76,24 @@ page.on("console", (message) => {
 });
 page.on("pageerror", (error) => pageErrors.push(String(error)));
 
+/** Records what the client actually sent, so a mismatch can be read rather than guessed at. */
+const noteCalls = [];
+page.on("response", async (response) => {
+  const url = response.url();
+  if (!/\/api\/v1\/notes|\/api\/v1\/sync/.test(url)) {
+    return;
+  }
+  const request = response.request();
+  const body = request.postData() ?? "";
+  noteCalls.push({
+    method: request.method(),
+    path: url.replace(/^https?:\/\/[^/]+/, ""),
+    status: response.status(),
+    revision: /"revision":(\d+)/.exec(body)?.[1] ?? null,
+    baseRevision: /"baseRevision":(\d+)/.exec(body)?.[1] ?? null,
+  });
+});
+
 try {
   // 1. First run: enrol. The app shows the URI and the recovery codes exactly once.
   await page.goto(BASE_URL, { waitUntil: "domcontentloaded", timeout: 30_000 });
@@ -279,7 +297,69 @@ try {
   const decrypted = await page.evaluate(() => document.body.innerText);
   check("the note decrypts after a recovery login", /文本与结构|Markdown|Untitled/.test(decrypted));
 
-  // 8. Diagrams render in place in the visual editor, not only in the preview.
+  // 8. Sync (§16): the saved note reaches the server, and a second device pulls it back.
+  await page.getByRole("button", { name: "Sync now", exact: true }).click();
+  await page.waitForTimeout(4000);
+
+  console.log("SYNC CALLS:", JSON.stringify(noteCalls.slice(-8)));
+  const syncLabel = (await page.getByTestId("sync-state").textContent()) ?? "";
+  check(
+    "the interface reports a sync state (§17)",
+    /Synced|Pending|Syncing/.test(syncLabel),
+    syncLabel.trim(),
+  );
+
+  const serverNoteIds = await page.evaluate(async () => {
+    const response = await fetch("/api/v1/notes", { credentials: "same-origin" });
+    const payload = await response.json();
+    return (payload.data?.notes ?? []).map((note) => note.id);
+  });
+  check(
+    "the saved note reached the server (§16)",
+    serverNoteIds.length >= 1,
+    `${serverNoteIds.length} note(s)`,
+  );
+
+  // A second device starts with an empty database, so anything it shows came from the server.
+  const secondContext = await browser.newContext({ viewport: { width: 1200, height: 900 } });
+  const secondPage = await secondContext.newPage();
+  try {
+    await secondPage.goto(BASE_URL, { waitUntil: "domcontentloaded" });
+    await secondPage.waitForSelector('input[aria-label="Username"]', { timeout: 30_000 });
+
+    // A code is single-use per step, so a replay in the same window is retried on the next one.
+    let signedIn = false;
+    for (let attempt = 0; attempt < 3 && !signedIn; attempt += 1) {
+      await secondPage.fill('input[aria-label="Username"]', "e2e-account");
+      await secondPage.fill('input[aria-label="Authenticator code"]', totpFromBase32(base32Secret));
+      await secondPage.click('button[type="submit"]');
+      signedIn = await secondPage
+        .waitForSelector('button:has-text("New note")', { timeout: 12_000 })
+        .then(() => true)
+        .catch(() => false);
+      if (!signedIn) {
+        // Wait for the next 30-second step rather than hammering the endpoint.
+        await secondPage.waitForTimeout(31_000);
+      }
+    }
+    check("a second device can sign in", signedIn);
+
+    if (signedIn) {
+      await secondPage.waitForTimeout(6000);
+      const pulled = await secondPage.evaluate(
+        () => document.querySelectorAll(".note-list button").length,
+      );
+      check(
+        "the second device pulled the note from the server (§16)",
+        pulled >= 1,
+        `${pulled} note(s)`,
+      );
+    }
+  } finally {
+    await secondContext.close();
+  }
+
+  // 9. Diagrams render in place in the visual editor, not only in the preview.
   if (await page.$(".cm-content")) {
     await page.getByRole("button", { name: "WYSIWYG", exact: true }).click();
     await page.waitForTimeout(7000);
@@ -291,7 +371,7 @@ try {
   check("formulas render in place in the editor", inPlace.katex > 0, `${inPlace.katex}`);
   check("diagrams render in place in the editor", inPlace.diagrams > 0, `${inPlace.diagrams}`);
 
-  // 9. Replace the authenticator from the recovery session (§3), then sign in with the new one. The
+  // 10. Replace the authenticator from the recovery session (§3), then sign in with the new one. The
   //    full circle is what proves the recovery path is a way back in rather than a dead end.
   const rebindPrompt = await page.$('[aria-label="Set up a new authenticator"]');
   check("a recovery login offers to replace the authenticator (§3)", rebindPrompt !== null);
@@ -317,7 +397,7 @@ try {
     );
   }
 
-  // 10. The app's own errors.
+  // 11. The app's own errors.
   const ownPageErrors = pageErrors.filter((message) => !EMBED_ORIGINATED.test(message));
   const ownConsoleErrors = consoleErrors.filter((message) => !EMBED_ORIGINATED.test(message));
   check(

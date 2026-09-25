@@ -39,6 +39,14 @@ const idSchema = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
 const createSchema = z
   .object({
     id: idSchema,
+    /**
+     * The revision the client encrypted this payload under.
+     *
+     * It has to come from the client: the revision is part of the envelope's AAD, so a payload encrypted
+     * at revision 4 cannot be stored as revision 1 and decrypted later — the AAD would not match.
+     * Revisions are therefore the client's numbering, and the server stores what it is given.
+     */
+    revision: z.number().int().min(1).optional(),
     folderId: idSchema.nullable().optional(),
     payload: envelopeSchema,
     pinned: z.boolean().optional(),
@@ -187,6 +195,7 @@ noteRoutes.post("/notes", requireSession(), requireCsrf(), async (c) => {
       id: body.id,
       folderId: body.folderId ?? null,
       payload: body.payload,
+      ...(body.revision === undefined ? {} : { revision: body.revision }),
       ...(body.pinned === undefined ? {} : { pinned: body.pinned }),
       ...(body.sortOrder === undefined ? {} : { sortOrder: body.sortOrder }),
     },
