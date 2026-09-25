@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { Env } from "../env";
 import { ApiError } from "../lib/api-error";
 import { pruneRevisionHistory, syncChangeStatement } from "./records";
+import { recordConflict } from "./conflicts";
 
 /**
  * Notes (§9, §18, §19).
@@ -194,6 +195,22 @@ export async function updateNote(
     throw new ApiError("PRECONDITION_FAILED", { diagnostic: "the note is in the recycle bin" });
   }
   if (existing.revision !== input.baseRevision) {
+    // §16: create a conflict instead of silently overwriting. The local side is the payload the client
+    // sent; if it sent none (a pin or a folder move), the note as the client believes it to be is not
+    // recoverable here, so the stored payload stands in — the conflict still records both revisions.
+    await recordConflict(
+      env,
+      {
+        userId,
+        objectType: "note",
+        objectId: noteId,
+        baseRevision: input.baseRevision,
+        local: input.payload ?? toEnvelope(existing),
+        remote: toEnvelope(existing),
+        remoteRevision: existing.revision,
+      },
+      nowMs,
+    );
     throw new ApiError("REVISION_CONFLICT", {
       diagnostic: `expected revision ${input.baseRevision}, found ${existing.revision}`,
     });
@@ -228,7 +245,24 @@ export async function updateNote(
     .run();
 
   if ((update.meta.changes ?? 0) === 0) {
-    // The revision moved between the read and the write.
+    // The revision moved between the read and the write. The current row is read again so the conflict
+    // records the remote side that actually won, rather than the stale one this call started from.
+    const current = await findNote(env, userId, noteId);
+    if (current) {
+      await recordConflict(
+        env,
+        {
+          userId,
+          objectType: "note",
+          objectId: noteId,
+          baseRevision: input.baseRevision,
+          local: nextPayload,
+          remote: toEnvelope(current),
+          remoteRevision: current.revision,
+        },
+        nowMs,
+      );
+    }
     throw new ApiError("REVISION_CONFLICT", {
       diagnostic: "the note changed while it was being saved",
     });

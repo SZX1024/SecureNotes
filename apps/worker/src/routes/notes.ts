@@ -21,6 +21,8 @@ import {
   updateNote,
   envelopeSchema,
 } from "../services/notes";
+import { listOpenConflicts, resolveConflict, serializeConflict } from "../services/conflicts";
+import { SYNC_FEED_DEFAULT_LIMIT, readSyncFeed } from "../services/sync";
 
 /**
  * Notes endpoints (§9, §15, §18, §19, §27).
@@ -41,6 +43,14 @@ const createSchema = z
     payload: envelopeSchema,
     pinned: z.boolean().optional(),
     sortOrder: z.number().int().min(0).optional(),
+  })
+  .strict();
+
+const resolveConflictSchema = z
+  .object({
+    resolution: z.enum(["local", "remote", "merged"]),
+    // Required for local and merged, absent for remote; the service enforces that.
+    payload: envelopeSchema.optional(),
   })
   .strict();
 
@@ -78,6 +88,86 @@ noteRoutes.get("/notes", requireSession(), async (c) => {
   });
 
   return jsonOk({ notes });
+});
+
+/**
+ * Incremental sync feed (§16).
+ *
+ * Read-only and cursor-based: the client sends the last sequence it applied and receives everything
+ * after it, with each changed object's encrypted payload attached. `hasMore` tells it whether to come
+ * back for another batch instead of guessing a limit.
+ */
+noteRoutes.get("/sync/changes", requireSession(), async (c) => {
+  const session = c.get("session")!;
+  const query = c.req.query();
+
+  const since = Number.parseInt(query["since"] ?? "0", 10);
+  if (!Number.isFinite(since) || since < 0) {
+    throw new ApiError("VALIDATION_FAILED", { diagnostic: "since must be a non-negative integer" });
+  }
+
+  const requestedLimit =
+    query["limit"] === undefined ? undefined : Number.parseInt(query["limit"], 10);
+  if (requestedLimit !== undefined && (!Number.isFinite(requestedLimit) || requestedLimit < 1)) {
+    throw new ApiError("VALIDATION_FAILED", { diagnostic: "limit must be a positive integer" });
+  }
+
+  const batch = await readSyncFeed(
+    c.env,
+    session.userId,
+    since,
+    requestedLimit ?? SYNC_FEED_DEFAULT_LIMIT,
+  );
+  return jsonOk(batch);
+});
+
+/**
+ * Open conflicts (§16).
+ *
+ * A client that receives `REVISION_CONFLICT` reads this to find out what is blocked and to get both
+ * sides for the diff. The payloads are the ciphertext envelopes, so the worker never sees either side.
+ */
+noteRoutes.get("/conflicts", requireSession(), async (c) => {
+  const session = c.get("session")!;
+  const rows = await listOpenConflicts(c.env, session.userId);
+  return jsonOk({ conflicts: rows.map(serializeConflict) });
+});
+
+/**
+ * Resolves a conflict (§16).
+ *
+ * `remote` accepts the server's version, which needs no write: the client already has that payload from
+ * this list. `local` and `merged` require a payload — the one to keep — and it is written as a new
+ * revision based on the remote revision the conflict recorded, which is what makes the write succeed
+ * rather than conflict again. If the note moved again in the meantime the conflict stays open, because
+ * resolving it against a third state would discard someone's work.
+ */
+noteRoutes.post("/conflicts/:id/resolve", requireSession(), requireCsrf(), async (c) => {
+  const session = c.get("session")!;
+  const body = await parseJsonBody(c, resolveConflictSchema);
+
+  const result = await resolveConflict(
+    c.env,
+    session.userId,
+    c.req.param("id"),
+    body.resolution,
+    body.payload,
+    Date.now(),
+  );
+
+  if (result.kind === "not_found") {
+    throw new ApiError("NOT_FOUND");
+  }
+  if (result.kind === "already_resolved") {
+    throw new ApiError("PRECONDITION_FAILED", { diagnostic: "the conflict is already resolved" });
+  }
+  if (result.kind === "stale") {
+    throw new ApiError("REVISION_CONFLICT", {
+      diagnostic: "the note changed again, so the conflict is still open",
+    });
+  }
+
+  return jsonOk({ conflict: serializeConflict(result.conflict) });
 });
 
 noteRoutes.post("/notes", requireSession(), requireCsrf(), async (c) => {

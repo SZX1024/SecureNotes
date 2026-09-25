@@ -24,6 +24,8 @@ const CT = "Zm9v";
 const TABLES = [
   "attachments",
   "audit_logs",
+  // §16: conflicts retain base, local and remote so an edit is never silently overwritten.
+  "conflicts",
   "folders",
   "note_attachments",
   "note_revisions",
