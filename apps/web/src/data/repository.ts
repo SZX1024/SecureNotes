@@ -129,6 +129,37 @@ export async function updateLocalNote(
 }
 
 /**
+ * Moves a note to the recycle bin (§19).
+ *
+ * The revision is deliberately **not** advanced and the payload is not re-encrypted, which is the one place in this
+ * file where that is right: deleting a note is a flag rather than a new version of its text, and the server does the
+ * same thing with the same revision. Advancing it here would leave the payload bound to a revision the server never
+ * agreed to, and the note would decrypt on this device and nowhere else.
+ *
+ * The note is marked locally straight away so the interface can respond without waiting for the network; the queue
+ * entry is what makes the deletion durable if the request never arrives.
+ */
+export async function deleteLocalNote(
+  context: LocalContext,
+  id: string,
+  nowMs?: number,
+): Promise<void> {
+  const existing = await context.db.notes.get(id);
+  if (!existing) {
+    throw new Error(`note ${id} is not in the local database`);
+  }
+
+  const now = nowMs ?? Date.now();
+  await context.db.notes.put({ ...existing, deletedAt: now, updatedAt: now });
+  await enqueueChange(context.db, {
+    objectType: "note",
+    objectId: id,
+    operation: "delete",
+    baseRevision: existing.revision,
+  });
+}
+
+/**
  * Changes a note's organisation without touching its text: its folder, its pin, its manual order.
  *
  * The payload is **re-encrypted** even though the text is unchanged. The revision is part of the

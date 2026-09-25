@@ -88,6 +88,12 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
   if (options.body !== undefined) {
     headers.set("content-type", "application/json");
     init.body = JSON.stringify(options.body);
+  } else if (!SAFE_METHODS.has(method)) {
+    // A write with nothing to say still has to declare what it is. The API refuses a state-changing request with no
+    // content type (415), which is right — it is the same rule that stops a form post from forging one — and it means
+    // a body-less DELETE has to be announced as JSON. Discovering this only in the browser is what left the sync
+    // engine's deletions failing with a 415 that looked like anything but a missing header.
+    headers.set("content-type", "application/json");
   }
   if (options.signal !== undefined) init.signal = options.signal;
 

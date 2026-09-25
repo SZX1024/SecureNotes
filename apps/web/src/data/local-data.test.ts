@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import {
   createLocalFolder,
   deleteLocalFolder,
+  deleteLocalNote,
   deleteLocalTag,
   readLocalNoteTags,
   renameLocalTag,
@@ -577,5 +578,35 @@ describe("unsynced work survives a restart (§31, §32)", () => {
     expect(queued).toEqual(["attachment", "note_attachment"]);
     second.close();
     await Dexie.delete(name).catch(() => undefined);
+  });
+});
+
+describe("moving a note to the recycle bin (§19)", () => {
+  it("marks it, queues the deletion, and leaves the payload at its revision", async () => {
+    const context = await freshContext();
+    try {
+      const note = await createLocalNote(context, {
+        id: "note-doomed",
+        title: "Doomed",
+        body: "text",
+      });
+
+      await deleteLocalNote(context, note.id, 4242);
+
+      const stored = await context.db.notes.get(note.id);
+      expect(stored?.deletedAt).toBe(4242);
+      // The one place the revision does not advance: `deleted_at` is a flag rather than a new version of the text,
+      // and the server sets it the same way. A bumped revision here would bind the payload to a revision that no
+      // server ever agreed to, and the note would decrypt on this device and nowhere else.
+      expect(stored?.revision).toBe(note.revision);
+      expect(stored?.payload).toEqual(note.payload);
+
+      // The note's own creation is still queued at this point; what matters is that the deletion is queued after it,
+      // in order, so the server sees the note before it sees it disappear.
+      const queued = await pendingChangesFor(context.db, "note-doomed");
+      expect(queued.map((entry) => entry.operation)).toEqual(["create", "delete"]);
+    } finally {
+      await context.close();
+    }
   });
 });

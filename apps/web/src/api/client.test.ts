@@ -116,5 +116,19 @@ describe("apiRequest", () => {
     await apiRequest("/notes");
     const [, getInit] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect((getInit.headers as Headers).get("x-csrf-token")).toBeNull();
+    // A read says nothing about a body.
+    expect((getInit.headers as Headers).get("content-type")).toBeNull();
+  });
+
+  it("declares JSON on a write that carries no body", async () => {
+    document.cookie = "csrf=token-abc; path=/";
+    fetchMock.mockImplementation(async () => jsonResponse({ ok: true, data: {} }));
+
+    // A DELETE has nothing to say and still has to say what it is: the API answers 415 without a content type, which
+    // is the rule that keeps a forged form post out. The sync engine's deletions were failing on exactly this.
+    await apiRequest("/notes/abc", { method: "DELETE" });
+    const [, deleteInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect((deleteInit.headers as Headers).get("content-type")).toBe("application/json");
+    expect(deleteInit.body).toBeUndefined();
   });
 });

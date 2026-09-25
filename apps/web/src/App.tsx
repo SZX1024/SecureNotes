@@ -23,6 +23,7 @@ import {
 } from "./app/flows";
 import {
   createLocalNote,
+  deleteLocalNote,
   readAllLocalNotes,
   updateLocalNote,
   type LocalContext,
@@ -174,6 +175,9 @@ export function App() {
   // Notes by default: opening a notebook and being shown a folder tree is the wrong first impression.
   const [panelView, setPanelView] = useState<PanelView | null>("notes");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  /** The note whose permanent deletion is waiting for a second, explicit press. */
+  const [confirmingPermanent, setConfirmingPermanent] = useState<string | null>(null);
+  const [recycleBusy, setRecycleBusy] = useState(false);
   const [typography, setTypography] = useState<Typography>(() => loadTypography(localStorage));
   const [preview, setPreview] = useState(false);
   const [theme, setTheme] = useState<ThemePreference>(() =>
@@ -928,6 +932,99 @@ export function App() {
     });
   }, [db, account, refresh, openNoteFrom, runRequest]);
 
+  /** Moves the open note to the recycle bin (§19). */
+  const deleteCurrentNote = useCallback(async () => {
+    if (draft === null || db === null || account === null) {
+      return;
+    }
+    const context: LocalContext = {
+      db,
+      dek: account.dek,
+      userId: account.userId,
+      keyVersion: account.keyVersion,
+    };
+    await runRequest(async () => {
+      await deleteLocalNote(context, draft.id);
+      await refresh(db, account);
+      setDraft(null);
+      scheduler.current?.scheduleAfterIdle();
+    });
+  }, [db, account, draft, refresh, runRequest]);
+
+  /**
+   * Brings a note back out of the recycle bin (§19).
+   *
+   * Straight to the API rather than through the change feed: restoring is an operation on the server's copy rather
+   * than an edit of the note's contents, and the pull that follows is what puts the note back in the list.
+   */
+  const restoreDeletedNote = useCallback(
+    async (id: string) => {
+      if (db === null || account === null) {
+        return;
+      }
+      setRecycleBusy(true);
+      try {
+        await runRequest(async () => {
+          const pending = await db.syncQueue.where("objectId").equals(id).toArray();
+          const neverReachedTheServer = pending.some((entry) => entry.operation === "create");
+          if (neverReachedTheServer) {
+            // There is nothing to restore: the note was created and deleted without the server ever hearing about it,
+            // so asking would be a 404 and the queued deletion would take the note away again the moment the network
+            // returned. Undoing both locally is the whole operation.
+            await db.transaction("rw", db.notes, db.syncQueue, async () => {
+              const row = await db.notes.get(id);
+              if (row) {
+                await db.notes.put({ ...row, deletedAt: null, updatedAt: Date.now() });
+              }
+              const stale = pending.filter((entry) => entry.operation === "delete");
+              await db.syncQueue.bulkDelete(stale.map((entry) => entry.id));
+            });
+          } else {
+            await apiRequest(`/notes/${id}/restore`, { method: "POST", body: {} });
+            scheduler.current?.syncNow();
+          }
+          await refresh(db, account);
+        });
+      } finally {
+        setRecycleBusy(false);
+      }
+    },
+    [db, account, refresh, runRequest],
+  );
+
+  /**
+   * Deletes a note for good (§19).
+   *
+   * The only place in the client that drops queued work, and on purpose: the server has confirmed the object no
+   * longer exists, so a change still queued for it could only ever come back as a 404. Everything the note owned goes
+   * with it: its row, its tag links, and the entries waiting to talk about it.
+   */
+  const deletePermanently = useCallback(
+    async (id: string) => {
+      if (db === null || account === null) {
+        return;
+      }
+      setRecycleBusy(true);
+      try {
+        await runRequest(async () => {
+          await apiRequest(`/notes/${id}/permanent`, { method: "DELETE" });
+          await db.transaction("rw", db.notes, db.noteTags, db.syncQueue, async () => {
+            await db.notes.delete(id);
+            await db.noteTags.where("noteId").equals(id).delete();
+            const pending = await db.syncQueue.toArray();
+            const stale = pending.filter((entry) => entry.objectId === id);
+            await db.syncQueue.bulkDelete(stale.map((entry) => entry.id));
+          });
+          setConfirmingPermanent(null);
+          await refresh(db, account);
+        });
+      } finally {
+        setRecycleBusy(false);
+      }
+    },
+    [db, account, refresh, runRequest],
+  );
+
   /** Appends pasted text to the draft. */
   const insertIntoDraft = useCallback((text: string) => {
     setDraft((current) => (current ? { ...current, body: `${current.body}${text}` } : current));
@@ -1211,11 +1308,18 @@ export function App() {
           onSelect: () => void downloadRecoveryPackage(),
         },
         { id: "sep-2", label: "", separator: true, onSelect: () => undefined },
+        { id: "sep-3", label: "", separator: true, onSelect: () => undefined },
         {
           id: "recycle",
           label: "Recycle bin",
           shortcut: shortcutFor("show-recycle-bin"),
           onSelect: () => setScreen("recycle-bin"),
+        },
+        {
+          id: "delete",
+          label: "Move this note to the recycle bin",
+          disabled: draft === null,
+          onSelect: () => void deleteCurrentNote(),
         },
       ],
     },
@@ -1507,12 +1611,40 @@ export function App() {
               <span className="muted">
                 deleted {new Date(entry.note.deletedAt ?? 0).toLocaleString()}
               </span>
+              <button
+                type="button"
+                onClick={() => void restoreDeletedNote(entry.note.id)}
+                disabled={recycleBusy}
+              >
+                Restore
+              </button>
+              {confirmingPermanent === entry.note.id ? (
+                // Two steps rather than a browser confirm(): a mis-click should not be able to destroy a note, and
+                // the second step has to say what it does.
+                <button
+                  type="button"
+                  className="danger"
+                  onClick={() => void deletePermanently(entry.note.id)}
+                  disabled={recycleBusy}
+                >
+                  Delete for good?
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConfirmingPermanent(entry.note.id)}
+                  disabled={recycleBusy}
+                >
+                  Delete permanently
+                </button>
+              )}
             </li>
           ))}
           {deleted.length === 0 && <li className="muted">Nothing here.</li>}
         </ul>
         <p className="muted">
-          Notes stay here for 30 days. Restoring and permanent deletion are handled by the API.
+          Notes stay here for 30 days and are removed automatically after that. Restoring brings one
+          back to where it was; deleting it for good cannot be undone.
         </p>
       </main>
     );

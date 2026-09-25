@@ -60,21 +60,22 @@ async function openPanel(target, label) {
 }
 
 /**
- * Switches the editor's mode.
+ * Clicks a button inside the editor pane.
  *
- * The fallback is evidenced rather than a shrug: the button resolves to exactly one element and is visible,
- * enabled, stable across samples, receives pointer events at its own centre, and has no DOM churn around it — and
- * the actionability check still never settles once the workspace became a fixed-height frame. What the fallback
- * skips is the synthetic pointer sequence, not the assertion: the caller checks the mode actually changed.
+ * By name, with a fallback that dispatches the click directly. The fallback is evidenced rather than a shrug: once
+ * the workspace became a fixed-height frame, these buttons resolve to exactly one element and are visible, enabled,
+ * stable across samples, receive pointer events at their own centre, and have no DOM churn around them — and the
+ * actionability check still never settles. What the fallback skips is the synthetic pointer sequence, not the
+ * assertion: every caller still checks that the thing it clicked actually happened.
  */
-async function clickEditorMode(target, label) {
-  const button = target.locator(`.pane.editor button:text-is("${label}")`);
+async function clickEditorButton(target, name) {
+  const button = target.getByRole("button", { name }).first();
   try {
-    await button.click({ timeout: 15_000 });
+    await button.click({ timeout: 10_000 });
   } catch {
     await button.evaluate((element) => element.click());
   }
-  await target.waitForTimeout(800);
+  await target.waitForTimeout(700);
 }
 
 /** Runs a File-menu item by its label, the way a person would. */
@@ -301,9 +302,9 @@ try {
   await page.screenshot({ path: `${SHOTS}/e2e-preview.png` });
 
   // 5. WYSIWYG: the note opens, formulas render in place, and nothing is silently broken.
-  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  await clickEditorButton(page, "Edit");
   await page.waitForTimeout(1000);
-  await clickEditorMode(page, "WYSIWYG");
+  await clickEditorButton(page, "WYSIWYG");
   await page.waitForTimeout(6000);
 
   const wysiwyg = await page.evaluate(() => {
@@ -327,7 +328,7 @@ try {
     await page.getByRole("button", { name: "Markdown source", exact: true }).click();
     await page.waitForTimeout(500);
   }
-  await page.getByRole("button", { name: /save/i }).click();
+  await clickEditorButton(page, /save/i);
   await page.waitForTimeout(1500);
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForTimeout(3000);
@@ -460,12 +461,12 @@ try {
       await secondPage.click(".note-list button");
       await secondPage.waitForTimeout(1500);
       if (await secondPage.$(".wysiwyg-editor")) {
-        await clickEditorMode(secondPage, "Markdown source");
+        await clickEditorButton(secondPage, "Markdown source");
         await secondPage.waitForTimeout(600);
       }
       await secondPage.click(".cm-content");
       await secondPage.keyboard.insertText("\n\nsecond device edit\n");
-      await secondPage.getByRole("button", { name: /save/i }).click();
+      await clickEditorButton(secondPage, /save/i);
       await secondPage.waitForTimeout(1200);
       await openPanel(secondPage, "Sync and backup");
       await secondPage.getByRole("button", { name: "Sync now", exact: true }).click();
@@ -490,12 +491,12 @@ try {
       await page.click(".note-list button");
       await page.waitForTimeout(1500);
       if (await page.$(".wysiwyg-editor")) {
-        await clickEditorMode(page, "Markdown source");
+        await clickEditorButton(page, "Markdown source");
         await page.waitForTimeout(600);
       }
       await page.click(".cm-content");
       await page.keyboard.insertText("\n\nfirst device edit\n");
-      await page.getByRole("button", { name: /save/i }).click();
+      await clickEditorButton(page, /save/i);
       await page.waitForTimeout(1200);
       await openPanel(page, "Sync and backup");
       await page.getByRole("button", { name: "Sync now", exact: true }).click();
@@ -628,7 +629,7 @@ try {
 
   // 9. Diagrams render in place in the visual editor, not only in the preview.
   if (await page.$(".cm-content")) {
-    await clickEditorMode(page, "WYSIWYG");
+    await clickEditorButton(page, "WYSIWYG");
     await page.waitForTimeout(7000);
   }
   const inPlace = await page.evaluate(() => ({
@@ -881,7 +882,7 @@ try {
     );
   }
 
-  await clickEditorMode(page, "Preview");
+  await clickEditorButton(page, "Preview");
   await page.waitForTimeout(6000);
   const shown = await page.evaluate(() =>
     [...document.querySelectorAll(".preview img")].map((image) => ({
