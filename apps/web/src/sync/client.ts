@@ -36,9 +36,21 @@ async function noteBody(db: SecureNotesDatabase, objectId: string, baseRevision:
  * `create` on the server is a create; everything else is a patch carrying the base revision the edit
  * was based on, which is what lets the server detect a conflict instead of overwriting (§16).
  */
+export interface PushHooks {
+  /**
+   * The attachment ids a note references.
+   *
+   * Supplied by the caller because the references live inside the note's encrypted payload, and the sync
+   * engine has no key by design: it decides order, compression and retry, and asks for plaintext only when a
+   * push genuinely needs it.
+   */
+  attachmentRefs?: (noteId: string) => Promise<string[]>;
+}
+
 export async function pushChange(
   db: SecureNotesDatabase,
   change: SyncQueueItem,
+  hooks: PushHooks = {},
 ): Promise<"ok" | "conflict" | "auth" | "retry"> {
   try {
     if (change.objectType === "note") {
@@ -85,6 +97,46 @@ export async function pushChange(
           method: "PATCH",
           body: { ...body, baseRevision: change.baseRevision },
         });
+      }
+      return "ok";
+    }
+
+    if (change.objectType === "note_attachment") {
+      if (!hooks.attachmentRefs) {
+        // A programming error, and deliberately not a silent success: acknowledging an entry the server was
+        // never told about would drop the user's reference with no trace of it having happened.
+        throw new Error(
+          "pushChange needs the attachment reference reader for note_attachment changes",
+        );
+      }
+      const desired = new Set(await hooks.attachmentRefs(change.objectId));
+      // The server keeps one id per link, so the delta is computed against what it has: linking and
+      // unlinking are each idempotent, which is what lets a retry of this entry be harmless.
+      const { attachments } = await apiRequest<{ attachments: Array<{ id: string }> }>(
+        `/notes/${change.objectId}/attachments`,
+      ).catch((error: unknown) => {
+        // 404 here means the note is not on the server yet, not that anything is wrong: the note's own upload
+        // may have been rejected or may still be queued. Retrying is the answer — pausing the note as a
+        // conflict would ask the user to resolve a conflict the server never recorded.
+        if (error instanceof ApiError && error.status === 404) {
+          throw new ApiError("PRECONDITION_FAILED", 412, "the note is not on the server yet");
+        }
+        throw error;
+      });
+      const current = new Set(attachments.map((attachment) => attachment.id));
+
+      for (const id of desired) {
+        if (!current.has(id)) {
+          await apiRequest(`/notes/${change.objectId}/attachments`, {
+            method: "POST",
+            body: { attachmentId: id },
+          });
+        }
+      }
+      for (const id of current) {
+        if (!desired.has(id)) {
+          await apiRequest(`/notes/${change.objectId}/attachments/${id}`, { method: "DELETE" });
+        }
       }
       return "ok";
     }

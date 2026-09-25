@@ -39,12 +39,14 @@ import {
   deleteLocalFolder,
   deleteLocalTag,
   readLocalFolderName,
+  readLocalNote,
   readLocalNoteTags,
   readLocalTagName,
   renameLocalTag,
   setLocalNoteTags,
   updateLocalFolder,
   updateLocalNoteMetadata,
+  enqueueAttachmentLinkChange,
 } from "./data/repository";
 import {
   buildFolderTree,
@@ -62,7 +64,6 @@ import {
   saveRichTextPreference,
 } from "./editor/paste";
 import { uploadAttachment } from "./data/attachments-client";
-import { syncAttachmentLinks } from "./data/attachments-client";
 import {
   ATTACHMENT_URL_PREFIX,
   attachmentReferencesIn,
@@ -297,7 +298,21 @@ export function App() {
 
     const outcome = await syncNow({
       db,
-      push: (change) => pushChange(db, change),
+      push: (change) =>
+        pushChange(db, change, {
+          // Decrypted here rather than in the engine, which has no key by design: the references are part of
+          // the note's own text.
+          attachmentRefs: async (noteId) => {
+            const context: LocalContext = {
+              db,
+              dek: account.dek,
+              userId: account.userId,
+              keyVersion: account.keyVersion,
+            };
+            const stored = await readLocalNote(context, noteId);
+            return stored ? attachmentRefsIn(stored.document.body) : [];
+          },
+        }),
       pull: (since) => pullChanges(since),
       apply: applyRemote(db),
     });
@@ -548,7 +563,9 @@ export function App() {
       const currentRefs = attachmentRefsIn(draft.body);
       const { added, removed } = diffAttachmentRefs(openedRefs, currentRefs);
       if (added.length > 0 || removed.length > 0) {
-        await syncAttachmentLinks(draft.id, added, removed);
+        // Queued rather than called: a note that has not reached the server yet would be answered with 404 and
+        // the reference would be lost, leaving the attachment looking unreferenced.
+        await enqueueAttachmentLinkChange(db, draft.id);
         setOpenedRefs(currentRefs);
       }
       await refresh(db, account);
@@ -614,10 +631,14 @@ export function App() {
 
   const uploadImages = useCallback(
     async (files: readonly File[]) => {
-      if (!account || !draft) {
+      if (!account || !draft || !db) {
         return;
       }
       const noteId = draft.id;
+      // The body this run is building, so the note can be written once it has been extended: the reference has
+      // to be in the stored note before the link is queued, because the link's own push reads the references
+      // from there.
+      let body = draft.body;
       for (const file of files) {
         try {
           const uploaded = await uploadAttachment({
@@ -626,15 +647,26 @@ export function App() {
             keyVersion: account.keyVersion,
             attachmentId: crypto.randomUUID(),
           });
+          body = `${body}${body.endsWith("\n") || body.length === 0 ? "" : "\n"}${uploaded.markdown}\n`;
           setDraft((current) =>
-            current && current.id === noteId
-              ? {
-                  ...current,
-                  body: `${current.body}${current.body.endsWith("\n") || current.body.length === 0 ? "" : "\n"}${uploaded.markdown}\n`,
-                }
-              : current,
+            current && current.id === noteId ? { ...current, body } : current,
           );
-          await syncAttachmentLinks(noteId, [uploaded.id], []);
+
+          // Saved, not just shown. Pasting an image used to update the editor alone and queue the link
+          // straight away: the push then read the references from the *stored* note, found none, and quietly
+          // acknowledged the entry — so the image was uploaded but never linked, and the sweep that collects
+          // unreferenced attachments would have taken it.
+          const context: LocalContext = {
+            db,
+            dek: account.dek,
+            userId: account.userId,
+            keyVersion: account.keyVersion,
+          };
+          await updateLocalNote(context, { id: noteId, title: draft.title, body });
+          await enqueueAttachmentLinkChange(db, noteId);
+          // The image is safe locally, but its reference still has to travel: without a pass it would sit in
+          // the queue until some unrelated edit happened to schedule one.
+          scheduler.current?.scheduleAfterIdle();
           setMessage("Image encrypted and attached.");
         } catch (error) {
           if (error instanceof ApiError && error.status === 401) {
@@ -648,7 +680,7 @@ export function App() {
         }
       }
     },
-    [account, draft, handleRevocation],
+    [account, db, draft, handleRevocation],
   );
 
   /**
@@ -1109,6 +1141,7 @@ export function App() {
             ) : (
               <div
                 className="editor-host"
+                data-note-id={draft.id}
                 onPaste={handlePaste}
                 onDrop={handleDrop}
                 onDragOver={(event) => event.preventDefault()}

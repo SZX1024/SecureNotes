@@ -1,9 +1,11 @@
 import {
   MAX_ATTACHMENT_BYTES,
   base64ToBytes,
+  decryptObject,
   encryptObject,
   utf8,
   type Bytes,
+  type CryptoEnvelope,
 } from "@securenotes/shared";
 
 import { CSRF_HEADER_NAME } from "@securenotes/shared";
@@ -66,6 +68,44 @@ export async function encryptAttachmentBytes(
   };
 }
 
+/**
+ * Encrypts an attachment's filename.
+ *
+ * The filename is content like any other (§7): the server stores an envelope and never learns it. The object
+ * type is `attachment_meta`, and the revision is fixed at 1 because attachments are immutable — replacing one
+ * creates a new id.
+ *
+ * Getting this wrong is not a subtle failure: the server validates the metadata and rejects a plain string,
+ * so every upload fails with a 400 and pasting an image silently does nothing.
+ */
+export async function encryptAttachmentName(
+  dek: CryptoKey,
+  attachmentId: string,
+  keyVersion: number,
+  name: string,
+): Promise<CryptoEnvelope> {
+  return encryptObject(
+    dek,
+    { objectType: "attachment_meta", objectId: attachmentId, revision: 1, keyVersion },
+    utf8(name),
+  );
+}
+
+/** Reads a filename back, for a caller that has the envelope and the key. */
+export async function decryptAttachmentName(
+  dek: CryptoKey,
+  attachmentId: string,
+  keyVersion: number,
+  envelope: CryptoEnvelope,
+): Promise<string> {
+  const plaintext = await decryptObject(
+    dek,
+    { objectType: "attachment_meta", objectId: attachmentId, revision: 1, keyVersion },
+    envelope,
+  );
+  return new TextDecoder().decode(plaintext);
+}
+
 export async function uploadAttachment(input: AttachmentUploadInput): Promise<UploadedAttachment> {
   const { file, dek, keyVersion, attachmentId } = input;
 
@@ -89,7 +129,13 @@ export async function uploadAttachment(input: AttachmentUploadInput): Promise<Up
 
   const metadata = {
     id: attachmentId,
-    name: file.name || "attachment",
+    // The envelope the server's contract requires, not the filename itself.
+    name: await encryptAttachmentName(
+      dek,
+      attachmentId,
+      keyVersion,
+      file.name.length > 0 ? file.name : "attachment",
+    ),
     contentType: file.type || "application/octet-stream",
     // The size the server stores and counts against the ceiling is the ciphertext.
     sizeBytes: ciphertext.byteLength,

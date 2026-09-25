@@ -5,10 +5,15 @@ import {
   deriveKek,
   generateDekRaw,
   importDek,
+  type CryptoEnvelope,
 } from "@securenotes/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { encryptAttachmentBytes, uploadAttachment } from "./attachments-client";
+import {
+  decryptAttachmentName,
+  encryptAttachmentBytes,
+  uploadAttachment,
+} from "./attachments-client";
 
 /**
  * Attachment encryption (§7, §12).
@@ -328,5 +333,63 @@ describe("session requirements (§14)", () => {
         attachmentId: "att-401",
       }),
     ).rejects.toMatchObject({ status: 401 });
+  });
+});
+
+describe("the upload contract (§15)", () => {
+  it("sends the filename as an envelope the server accepts, and it round-trips", async () => {
+    const dek = await importDek(generateDekRaw());
+    let sent: { name: unknown } | null = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit = {}) => {
+        const form = init.body as FormData;
+        sent = JSON.parse(String(form.get("metadata")));
+        return Response.json({ ok: true, data: { attachment: { id: "a-1" } } });
+      }),
+    );
+
+    await uploadAttachment({
+      file: new File([new Uint8Array([1, 2, 3])], "holiday photo.png", { type: "image/png" }),
+      dek,
+      keyVersion: 1,
+      attachmentId: "018f0000-0000-7000-8000-00000000aaaa",
+    });
+
+    // A plain string here is what broke pasting an image: the server validates the metadata and answers 400,
+    // so the bytes never leave the browser.
+    const name = sent!.name as CryptoEnvelope;
+    expect(typeof name).toBe("object");
+    expect(name.alg).toBe("AES-256-GCM");
+
+    // And it is the filename, encrypted — not something else that happens to be an envelope.
+    await expect(
+      decryptAttachmentName(dek, "018f0000-0000-7000-8000-00000000aaaa", 1, name),
+    ).resolves.toBe("holiday photo.png");
+    vi.unstubAllGlobals();
+  });
+
+  it("names an unnamed file rather than sending an empty envelope", async () => {
+    const dek = await importDek(generateDekRaw());
+    let sent: { name: CryptoEnvelope } | null = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit = {}) => {
+        sent = JSON.parse(String((init.body as FormData).get("metadata")));
+        return Response.json({ ok: true, data: { attachment: { id: "a-2" } } });
+      }),
+    );
+
+    await uploadAttachment({
+      file: new File([new Uint8Array([1])], "", { type: "image/png" }),
+      dek,
+      keyVersion: 1,
+      attachmentId: "018f0000-0000-7000-8000-00000000bbbb",
+    });
+
+    await expect(
+      decryptAttachmentName(dek, "018f0000-0000-7000-8000-00000000bbbb", 1, sent!.name),
+    ).resolves.toBe("attachment");
+    vi.unstubAllGlobals();
   });
 });

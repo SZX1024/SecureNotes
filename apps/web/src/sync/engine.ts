@@ -308,7 +308,29 @@ export async function syncNow(deps: SyncDependencies): Promise<SyncOutcome> {
     attachment: 4,
     note_attachment: 5,
   };
-  const orderedGroups = [...groups.entries()].sort(([left], [right]) => {
+  /**
+   * A link cannot be pushed before its note exists.
+   *
+   * Ordering is not enough on its own: each group is pushed independently, so a note whose own upload failed or
+   * conflicted in this pass would still be followed by its attachments, and the server answers a link for a
+   * note it has never heard of with 404. Holding the link until the note's own entries are gone keeps the two
+   * in step, and the next pass sends the note first.
+   */
+  const pendingObjectIds = new Set(
+    [...groups.entries()]
+      .filter(([key]) => key.startsWith("note:"))
+      .map(([, items]) => items[0]!.objectId),
+  );
+  const pushableGroups = [...groups.entries()].filter(([key, items]) => {
+    if (!key.startsWith("note_attachment:")) {
+      return true;
+    }
+    const noteId = items[0]!.objectId;
+    // Its own entry is still queued (this one), so the note counts as pending only if another note entry is.
+    return !pendingObjectIds.has(noteId) || items.some((item) => item.operation === "create");
+  });
+
+  const orderedGroups = pushableGroups.sort(([left], [right]) => {
     const leftType = left.split(":")[0] ?? "";
     const rightType = right.split(":")[0] ?? "";
     const byType = (dependencyOrder[leftType] ?? 99) - (dependencyOrder[rightType] ?? 99);

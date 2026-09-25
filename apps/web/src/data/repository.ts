@@ -398,6 +398,30 @@ export async function readLocalTagName(context: LocalContext, tag: LocalTag): Pr
   return new TextDecoder().decode(plaintext);
 }
 
+/**
+ * Queues a change to a note's attachment references.
+ *
+ * The references travelled outside the queue before this, which meant they were uploaded the moment the user
+ * pasted an image — before the note itself existed on the server, when the note was new. The server answered
+ * 404, the reference never arrived, and the attachment was left looking unreferenced, which is exactly what
+ * the deletion sweep collects. Queued, they are uploaded after the note, in order, and retried until the
+ * server acknowledges them.
+ *
+ * The work itself is done by the caller, which has the key: the engine is deliberately free of crypto, so it
+ * asks for the references rather than decrypting the note.
+ */
+export async function enqueueAttachmentLinkChange(
+  db: SecureNotesDatabase,
+  noteId: string,
+): Promise<void> {
+  await enqueueChange(db, {
+    objectType: "note_attachment",
+    objectId: noteId,
+    operation: "update",
+    baseRevision: null,
+  });
+}
+
 /** Renames a tag. Its links are untouched: they point at the id, which does not change. */
 export async function renameLocalTag(
   context: LocalContext,
