@@ -46,6 +46,16 @@ export const keyMaterialSchema = z
 export type KeyMaterialUpload = z.infer<typeof keyMaterialSchema>;
 
 /**
+ * The material a TOTP rebind uploads.
+ *
+ * Identical except that the recovery wrappings may be absent, meaning "keep the stored ones". The
+ * codes and the DEK are unchanged by a rebind, so the existing wrappings remain the way back in.
+ */
+export type RebindMaterialUpload = Omit<KeyMaterialUpload, "recoveryWrappings"> & {
+  recoveryWrappings?: KeyMaterialUpload["recoveryWrappings"];
+};
+
+/**
  * Re-validates every envelope with the shared parser.
  *
  * Zod has already checked the fields' presence and types; `parseEnvelope` adds
@@ -53,10 +63,10 @@ export type KeyMaterialUpload = z.infer<typeof keyMaterialSchema>;
  * long enough to hold the GCM tag — so a malformed envelope is rejected before
  * it is stored rather than when it is first read.
  */
-export function assertEnvelopesAreWellFormed(upload: KeyMaterialUpload): void {
+export function assertEnvelopesAreWellFormed(upload: RebindMaterialUpload): void {
   try {
     parseEnvelope(upload.wrappedDek);
-    for (const wrapping of upload.recoveryWrappings) {
+    for (const wrapping of upload.recoveryWrappings ?? []) {
       parseEnvelope(wrapping.envelope);
     }
   } catch (error) {
@@ -70,7 +80,7 @@ export function assertEnvelopesAreWellFormed(upload: KeyMaterialUpload): void {
       diagnostic: "wrappedDek.key_version does not match keyVersion",
     });
   }
-  for (const wrapping of upload.recoveryWrappings) {
+  for (const wrapping of upload.recoveryWrappings ?? []) {
     if (wrapping.envelope.key_version !== upload.keyVersion) {
       throw new ApiError("VALIDATION_FAILED", {
         diagnostic: "a recovery wrapping has a mismatched key_version",
@@ -103,7 +113,7 @@ interface CodeRow {
 export async function storeKeyMaterial(
   env: Env,
   userId: string,
-  upload: KeyMaterialUpload,
+  upload: RebindMaterialUpload,
   nowMs: number,
 ): Promise<void> {
   assertEnvelopesAreWellFormed(upload);
@@ -121,26 +131,31 @@ export async function storeKeyMaterial(
   }
 
   const bySalt = new Map(codes.results.map((row) => [row.kdf_salt, row]));
-  for (const wrapping of upload.recoveryWrappings) {
-    if (!bySalt.has(wrapping.salt)) {
+  const wrappings = upload.recoveryWrappings;
+
+  if (wrappings !== undefined) {
+    for (const wrapping of wrappings) {
+      if (!bySalt.has(wrapping.salt)) {
+        throw new ApiError("VALIDATION_FAILED", {
+          diagnostic: "a recovery wrapping refers to an unknown code salt",
+        });
+      }
+    }
+    if (new Set(wrappings.map((w) => w.salt)).size !== wrappings.length) {
+      throw new ApiError("VALIDATION_FAILED", { diagnostic: "duplicate recovery wrapping" });
+    }
+    if (wrappings.length !== codes.results.length) {
+      // Enforced rather than tolerated: partially wrapped codes are a recovery path that silently
+      // does not work.
       throw new ApiError("VALIDATION_FAILED", {
-        diagnostic: "a recovery wrapping refers to an unknown code salt",
+        diagnostic: `expected ${codes.results.length} recovery wrappings, got ${wrappings.length}`,
       });
     }
   }
-  if (
-    new Set(upload.recoveryWrappings.map((w) => w.salt)).size !== upload.recoveryWrappings.length
-  ) {
-    throw new ApiError("VALIDATION_FAILED", { diagnostic: "duplicate recovery wrapping" });
-  }
-  if (upload.recoveryWrappings.length !== codes.results.length) {
-    // Enforced rather than tolerated: partially wrapped codes are a recovery
-    // path that silently does not work.
-    throw new ApiError("VALIDATION_FAILED", {
-      diagnostic: `expected ${codes.results.length} recovery wrappings, got ${upload.recoveryWrappings.length}`,
-    });
-  }
 
+  // The account's wrapping is written whether or not recovery wrappings were supplied: it is the part
+  // a rebind actually changes. Returning early when they were absent would report success while
+  // changing nothing.
   const statements = [
     env.DB.prepare(
       `UPDATE users
@@ -155,7 +170,7 @@ export async function storeKeyMaterial(
       upload.wrappedDek.crypto_version,
       nowMs,
     ),
-    ...upload.recoveryWrappings.map((wrapping) =>
+    ...(wrappings ?? []).map((wrapping) =>
       env.DB.prepare(
         `UPDATE recovery_codes
             SET wrapped_dek_iv = ?2, wrapped_dek_ciphertext = ?3,

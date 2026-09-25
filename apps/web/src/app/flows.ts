@@ -1,6 +1,7 @@
 import {
   buildRecoveryWrappings,
   deriveKek,
+  deriveRecoveryKek,
   generateDekRaw,
   importDek,
   unwrapDek,
@@ -228,6 +229,132 @@ export async function signIn(input: {
   }
 }
 
+export interface RecoverySignInResult {
+  account: UnlockedAccount;
+  /** §3: after a recovery login the authenticator must be reconfigured. */
+  mustRebindTotp: boolean;
+  rememberDevice: boolean;
+}
+
+/**
+ * Signs in with a recovery code (§3).
+ *
+ * This is the path that has to work when the authenticator is gone, so it cannot depend on the TOTP
+ * secret: the KEK is derived from the code itself and the per-code salt the server returns, and the
+ * DEK is unwrapped from **that code's** wrapping. A recovery code is therefore a complete key, which
+ * is what makes losing a phone survivable — and why the codes are worth storing somewhere else.
+ *
+ * Returns null when the code is rejected (wrong, or already spent: they are single use).
+ */
+export async function signInWithRecoveryCode(input: {
+  username: string;
+  code: string;
+  rememberDevice?: boolean;
+  db?: SecureNotesDatabase;
+}): Promise<RecoverySignInResult | null> {
+  let response: {
+    userId: string;
+    username: string;
+    kdfSalt: string;
+    keyVersion: number;
+    mustRebindTotp?: boolean;
+    rememberDevice?: boolean;
+    recovery: { salt: string; wrappedDek: CryptoEnvelope } | null;
+  };
+
+  try {
+    response = await apiRequest("/auth/recovery", {
+      method: "POST",
+      body: {
+        username: input.username,
+        code: input.code,
+        ...(input.rememberDevice === undefined ? {} : { rememberDevice: input.rememberDevice }),
+      },
+    });
+  } catch {
+    // A rejected or already-spent code is an expected outcome.
+    return null;
+  }
+
+  if (!response.recovery?.wrappedDek) {
+    throw new Error(
+      "This account has no recovery wrapping stored, so a recovery code cannot unlock its notes.",
+    );
+  }
+
+  const kek = await deriveRecoveryKek(input.code, response.recovery.salt);
+  const rawDek = await unwrapDek(kek, response.recovery.wrappedDek, {
+    userId: response.userId,
+    keyVersion: response.keyVersion,
+  });
+
+  try {
+    const dek = await importDek(rawDek);
+    await rememberOrForgetDevice(input.db, input.rememberDevice === true, {
+      userId: response.userId,
+      kdfSalt: response.kdfSalt,
+      keyVersion: response.keyVersion,
+      wrappedDek: response.recovery.wrappedDek,
+      rawDek,
+    });
+
+    return {
+      account: {
+        userId: response.userId,
+        username: response.username,
+        kdfSalt: response.kdfSalt,
+        keyVersion: response.keyVersion,
+        // Not available on this path by design: that is why a rebind is required.
+        totpSecret: "",
+        dek,
+      },
+      mustRebindTotp: response.mustRebindTotp === true,
+      rememberDevice: response.rememberDevice ?? false,
+    };
+  } finally {
+    wipe(rawDek);
+  }
+}
+
+/**
+ * Stores or removes the device wrapping, so offline unlock follows the user's choice.
+ *
+ * Shared by the code and recovery paths: signing in without asking to be remembered must not leave
+ * an offline unlock path behind from an earlier session.
+ */
+async function rememberOrForgetDevice(
+  db: SecureNotesDatabase | undefined,
+  remember: boolean,
+  material: {
+    userId: string;
+    kdfSalt: string;
+    keyVersion: number;
+    wrappedDek: CryptoEnvelope;
+    rawDek: Bytes;
+  },
+): Promise<void> {
+  if (!db) {
+    return;
+  }
+  if (!remember) {
+    await forgetDeviceKey(db);
+    return;
+  }
+  const deviceKey = await getOrCreateDeviceKey(db);
+  await db.keyMaterial.put({
+    id: "account",
+    userId: material.userId,
+    kdfSalt: material.kdfSalt,
+    keyVersion: material.keyVersion,
+    wrappedDek: material.wrappedDek,
+    deviceWrappedDek: await wrapDekForDevice(deviceKey, material.rawDek, {
+      userId: material.userId,
+      keyVersion: material.keyVersion,
+    }),
+    updatedAt: Date.now(),
+  });
+}
+
 /**
  * Offline unlock with the device key (§7).
  *
@@ -258,6 +385,119 @@ export async function unlockWithDeviceKey(
       totpSecret: "",
       dek: await importDek(rawDek),
     };
+  } finally {
+    wipe(rawDek);
+  }
+}
+
+export interface StartedRebind {
+  totpSecretBase32: string;
+  totpUri: string;
+  keyVersion: number;
+}
+
+/** Starts a TOTP rebind: the server generates a pending secret (§3). */
+export async function beginTotpRebind(): Promise<StartedRebind> {
+  const response = await apiRequest<StartedRebind & { state: string }>(
+    "/security/totp/change/start",
+    {
+      method: "POST",
+      body: { nonce: await nonceFor("totp-change-start") },
+    },
+  );
+  return {
+    totpSecretBase32: response.totpSecretBase32,
+    totpUri: response.totpUri,
+    keyVersion: response.keyVersion,
+  };
+}
+
+export interface VerifiedRebind {
+  /** The new secret: it derives the new KEK. */
+  totpSecret: string;
+  /** The old secret: it is what can still unwrap the DEK as stored. */
+  previousTotpSecret: string;
+  keyVersion: number;
+}
+
+/**
+ * Verifies a code from the pending secret.
+ *
+ * Both secrets come back for the duration of the rebind, and both are needed: the DEK on the server
+ * is still wrapped under the old KEK, and it has to be re-wrapped under the new one. The client holds
+ * the DEK only as a non-extractable key, so it cannot be exported — it is unwrapped from the server's
+ * stored material with the old secret instead.
+ */
+export async function verifyTotpRebind(code: string): Promise<VerifiedRebind | null> {
+  try {
+    const response = await apiRequest<VerifiedRebind & { state: string }>(
+      "/security/totp/change/verify",
+      {
+        method: "POST",
+        body: { nonce: await nonceFor("totp-change-verify"), code },
+      },
+    );
+    return {
+      totpSecret: response.totpSecret,
+      previousTotpSecret: response.previousTotpSecret,
+      keyVersion: response.keyVersion,
+    };
+  } catch {
+    // A wrong code is an expected outcome.
+    return null;
+  }
+}
+
+/**
+ * Re-wraps the DEK under the new KEK and commits the rebind.
+ *
+ * The recovery wrappings are deliberately not re-uploaded: a rebind does not change the DEK, so the
+ * stored ones stay valid, and on this path the client has no plaintext codes to wrap with — it signed
+ * in with one. The server treats their absence as "keep what is stored".
+ *
+ * The server revokes every session on completion, including this one, so the caller must expect to
+ * authenticate again.
+ */
+export async function completeTotpRebind(input: {
+  account: UnlockedAccount;
+  verified: VerifiedRebind;
+}): Promise<void> {
+  const { account, verified } = input;
+
+  const material = await apiRequest<{ wrappedDek: CryptoEnvelope | null }>("/key-material");
+  if (!material.wrappedDek) {
+    throw new Error("the account has no key material to re-wrap");
+  }
+
+  const previousKek = await deriveKek({
+    username: account.username,
+    totpSecretBase32: verified.previousTotpSecret,
+    kdfSaltBase64: account.kdfSalt,
+  });
+  const rawDek = await unwrapDek(previousKek, material.wrappedDek, {
+    userId: account.userId,
+    keyVersion: material.wrappedDek.key_version,
+  });
+
+  try {
+    const nextKek = await deriveKek({
+      username: account.username,
+      totpSecretBase32: verified.totpSecret,
+      kdfSaltBase64: account.kdfSalt,
+    });
+    const wrappedDek = await wrapDek(nextKek, rawDek, {
+      userId: account.userId,
+      keyVersion: verified.keyVersion,
+    });
+
+    await apiRequest("/security/totp/change/complete", {
+      method: "POST",
+      body: {
+        nonce: await nonceFor("totp-change-complete"),
+        keyVersion: verified.keyVersion,
+        wrappedDek,
+      },
+    });
   } finally {
     wipe(rawDek);
   }

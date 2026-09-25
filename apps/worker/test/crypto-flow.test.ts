@@ -518,3 +518,69 @@ describe("TOTP rebind: commit (§3, ADR-004)", () => {
     expect(recoveredViaCode).toEqual(originalDek);
   });
 });
+
+describe("TOTP rebind without recovery wrappings (§3)", () => {
+  /**
+   * The rebind path a recovery login takes: the client has the DEK but no plaintext recovery codes,
+   * because it signed in with one of them. The stored wrappings stay valid (the DEK does not change),
+   * so they are kept — and the account's own wrapping must still be written. An early return here
+   * would make the rebind report success while changing nothing at all.
+   */
+  it("writes the account wrapping and keeps the stored recovery wrappings", async () => {
+    const before = await currentWrappedDek();
+    const codesBefore = await testEnv.DB.prepare(
+      "SELECT kdf_salt AS salt, wrapped_dek_iv AS iv, wrapped_dek_ciphertext AS ct FROM recovery_codes ORDER BY kdf_salt",
+    ).all<{ salt: string; iv: string | null; ct: string | null }>();
+
+    const started = await authedRequest<{
+      ok: true;
+      data: { totpSecretBase32: string; keyVersion: number };
+    }>("/security/totp/change/start", jar, {
+      method: "POST",
+      body: { nonce: await nonce("totp-change-start") },
+    });
+    expect(started.status, JSON.stringify(started.body)).toBe(200);
+
+    // A code from the pending secret, so the rebind can be verified.
+    const newSecret = started.body.data.totpSecretBase32;
+    const verified = await authedRequest<{
+      ok: true;
+      data: { previousTotpSecret: string; keyVersion: number };
+    }>("/security/totp/change/verify", jar, {
+      method: "POST",
+      body: { nonce: await nonce("totp-change-verify"), code: await totpFor(newSecret) },
+    });
+    expect(verified.status, JSON.stringify(verified.body)).toBe(200);
+
+    // Re-wrap the same DEK under the new KEK, which is what the client derives from the new secret.
+    const keyVersion = started.body.data.keyVersion;
+    const uploaded = await authedRequest("/security/totp/change/complete", jar, {
+      method: "POST",
+      body: {
+        nonce: await nonce("totp-change-complete"),
+        keyVersion,
+        wrappedDek: await wrapDek(await kekFor(newSecret), rawDek, { userId, keyVersion }),
+        // No recoveryWrappings: absent means "keep the stored ones".
+      },
+    });
+    expect(uploaded.status, JSON.stringify(uploaded.body)).toBe(200);
+
+    const after = await testEnv.DB.prepare(
+      "SELECT wrapped_dek_iv AS iv, key_version AS kv FROM users WHERE id = ?1",
+    )
+      .bind(userId)
+      .first<{ iv: string; kv: number }>();
+
+    // The account's wrapping changed and moved to the new key version.
+    expect(after?.iv).not.toBe(before.wrappedDek.iv);
+    expect(after?.kv).toBe(keyVersion);
+
+    const codesAfter = await testEnv.DB.prepare(
+      "SELECT kdf_salt AS salt, wrapped_dek_iv AS iv, wrapped_dek_ciphertext AS ct FROM recovery_codes ORDER BY kdf_salt",
+    ).all<{ salt: string; iv: string | null; ct: string | null }>();
+
+    // Every recovery wrapping is untouched: those codes are still a way back in.
+    expect(codesAfter.results).toEqual(codesBefore.results);
+    expect(codesAfter.results.some((row) => row.iv !== null)).toBe(true);
+  });
+});

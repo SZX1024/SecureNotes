@@ -5,11 +5,8 @@ import { base32Encode } from "../lib/base32";
 import { wipe } from "../lib/crypto";
 import { openSecret, sealSecret } from "../lib/secret-box";
 import { buildTotpUri, generateTotpSecret, verifyTotpCode } from "../lib/totp";
-import {
-  assertEnvelopesAreWellFormed,
-  storeKeyMaterial,
-  type KeyMaterialUpload,
-} from "./key-material";
+import { assertEnvelopesAreWellFormed, storeKeyMaterial } from "./key-material";
+import type { RebindMaterialUpload } from "./key-material";
 
 /**
  * TOTP rebind (§3, ADR-004).
@@ -206,7 +203,9 @@ export type RebindCompletion =
 export async function completeRebind(
   env: Env,
   userId: string,
-  upload: KeyMaterialUpload,
+  // The recovery wrappings may be absent here, meaning "keep the stored ones": a rebind does not
+  // change the DEK, and the client on this path may have no plaintext codes.
+  upload: RebindMaterialUpload,
   nowMs: number,
 ): Promise<RebindCompletion> {
   const row = await readRebindRow(env, userId);

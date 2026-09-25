@@ -439,6 +439,22 @@ authRoutes.post("/auth/recovery", authBodyGuard(), async (c) => {
       kdfSalt: account.kdfSalt,
       keyVersion: account.keyVersion,
       keyMaterialPresent: keyMaterialPresent(account),
+      // The redeemed code's own wrapping of the DEK. A recovery login has no TOTP secret to derive
+      // the KEK from — that is precisely what the user has lost — so without this the session could
+      // authenticate but decrypt nothing. Only the redeemed code's wrapping is ever returned.
+      recovery:
+        result.wrapping.iv && result.wrapping.ciphertext
+          ? {
+              salt: result.wrapping.salt,
+              wrappedDek: {
+                crypto_version: result.wrapping.cryptoVersion ?? account.cryptoVersion,
+                key_version: result.wrapping.keyVersion ?? account.keyVersion,
+                alg: "AES-256-GCM",
+                iv: result.wrapping.iv,
+                ciphertext: result.wrapping.ciphertext,
+              },
+            }
+          : null,
       // §3: the user is prompted to reconfigure TOTP after a recovery login.
       mustRebindTotp: true,
       revokedOtherSessions: revoked,

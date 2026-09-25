@@ -27,6 +27,23 @@ export const inlineRenderKey = new PluginKey("securenotes-inline-render");
 /** Rendered diagrams by source, so a re-render is not a re-render of the same diagram. */
 const diagramCache = new Map<string, string>();
 
+/** Renders in progress, so a decoration rebuilt mid-flight joins the existing render. */
+const inFlight = new Map<string, Promise<string>>();
+
+function renderOnce(source: string): Promise<string> {
+  const existing = inFlight.get(source);
+  if (existing) {
+    return existing;
+  }
+  const pending = renderDiagram(source).then((svg) => {
+    diagramCache.set(source, svg);
+    inFlight.delete(source);
+    return svg;
+  });
+  inFlight.set(source, pending);
+  return pending;
+}
+
 function mathElement(tex: string, display: boolean): HTMLElement {
   const span = document.createElement("span");
   span.className = display ? "math-preview math-preview-block" : "math-preview";
@@ -90,18 +107,37 @@ function buildDecorations(state: EditorState): DecorationSet {
         return;
       }
       const source = node.textContent;
-      const cached = diagramCache.get(source);
-      if (cached === undefined) {
-        void renderDiagram(source).then((svg) => {
-          diagramCache.set(source, svg);
-        });
-        return;
-      }
-      if (cached.length === 0) {
-        return;
-      }
+
       decorations.push(
-        Decoration.widget(pos + node.nodeSize, () => diagramElement(cached), { side: 1 }),
+        Decoration.widget(
+          pos + node.nodeSize,
+          () => {
+            // The rendered DOM persists once created, so the *widget fills itself* when the async
+            // render finishes. Creating the decoration only after the cache was warm meant nothing
+            // ever repainted and every diagram stayed a code block.
+            const cached = diagramCache.get(source);
+            if (cached !== undefined) {
+              return cached.length === 0 ? document.createElement("span") : diagramElement(cached);
+            }
+
+            const placeholder = document.createElement("div");
+            placeholder.className = "diagram-preview";
+            placeholder.textContent = "Rendering diagram…";
+
+            void renderOnce(source).then((svg) => {
+              if (svg.length === 0) {
+                // Left unrendered rather than replaced by an error: the code block is still there.
+                placeholder.remove();
+                return;
+              }
+              placeholder.textContent = "";
+              placeholder.innerHTML = svg;
+            });
+
+            return placeholder;
+          },
+          { side: 1 },
+        ),
       );
     }
     return;
@@ -154,4 +190,5 @@ export const inlineRenderPlugin = $prose(
 /** Test seam: the diagram cache is process-wide, so tests must be able to clear it. */
 export function clearDiagramCache(): void {
   diagramCache.clear();
+  inFlight.clear();
 }

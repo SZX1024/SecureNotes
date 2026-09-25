@@ -260,7 +260,23 @@ export async function verifyTotpCredentials(
   return { kind: "ok", account };
 }
 
-export type RecoveryResult = { kind: "ok"; account: Account } | { kind: "invalid" };
+/**
+ * The wrapping of the DEK that belongs to the redeemed code, plus its salt.
+ *
+ * Without these a recovery login can authenticate but cannot decrypt anything: the KEK is derived
+ * from the TOTP secret, which is exactly what the user has lost. The salt is not secret, and only
+ * the redeemed code's wrapping is returned — never another code's.
+ */
+export interface RedeemedRecoveryWrapping {
+  salt: string;
+  iv: string | null;
+  ciphertext: string | null;
+  cryptoVersion: number | null;
+  keyVersion: number | null;
+}
+
+export type RecoveryResult =
+  { kind: "ok"; account: Account; wrapping: RedeemedRecoveryWrapping } | { kind: "invalid" };
 
 /**
  * Redeems a recovery code (§3). Codes are single-use: the row is only updated
@@ -280,17 +296,33 @@ export async function redeemRecoveryCode(
   }
 
   const codeHash = await sha256Hex(normalizeRecoveryCode(code));
-  const consumed = await env.DB.prepare(
-    `UPDATE recovery_codes SET used_at = ?3
+  // Read first so the wrapping can be returned, then consume: the update's affected-row count still
+  // decides the winner, so two concurrent redemptions cannot both succeed.
+  const row = await env.DB.prepare(
+    `SELECT id, kdf_salt AS salt, wrapped_dek_iv AS iv, wrapped_dek_ciphertext AS ciphertext,
+            crypto_version AS cryptoVersion, key_version AS keyVersion
+       FROM recovery_codes
       WHERE user_id = ?1 AND code_hash = ?2 AND used_at IS NULL`,
   )
-    .bind(account.id, codeHash, nowMs)
+    .bind(account.id, codeHash)
+    .first<RedeemedRecoveryWrapping & { id: string }>();
+
+  if (!row) {
+    return { kind: "invalid" };
+  }
+
+  const consumed = await env.DB.prepare(
+    "UPDATE recovery_codes SET used_at = ?2 WHERE id = ?1 AND used_at IS NULL",
+  )
+    .bind(row.id, nowMs)
     .run();
 
   if ((consumed.meta.changes ?? 0) === 0) {
     return { kind: "invalid" };
   }
-  return { kind: "ok", account };
+
+  const { id: _id, ...wrapping } = row;
+  return { kind: "ok", account, wrapping };
 }
 
 /** Counts unused codes, so the UI can warn before the last one is spent. */

@@ -230,7 +230,94 @@ try {
   const afterSignIn = await page.evaluate(() => document.body.innerText);
   check("the note survives a reload and a sign-in", /Untitled|全量|Markdown/.test(afterSignIn));
 
-  // 7. The app's own errors.
+  // 7. A recovery code must unlock the notes, not merely sign in: the KEK is derived from the code
+  //    itself, because the TOTP secret is what a user who needs this path has lost.
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForTimeout(2500);
+
+  // Signing in with "remember this device" stores a device wrapping, so a reload offers the offline
+  // unlock instead of the sign-in form. That is the designed behaviour, and the recovery path has to
+  // be reachable from it.
+  const locked = await page.$('button:has-text("Sign in with a code instead")');
+  check("a remembered device offers offline unlock after a reload", locked !== null);
+  if (locked) {
+    await locked.click();
+    await page.waitForTimeout(800);
+  }
+
+  await page.getByRole("button", { name: /recovery code/i }).click();
+  await page.waitForSelector('input[aria-label="Recovery code"]', { timeout: 15_000 });
+  await page.fill('input[aria-label="Username"]', "e2e-account");
+  await page.fill('input[aria-label="Recovery code"]', recoveryCodes[0].trim());
+  await page.click('button[type="submit"]');
+  await page.waitForSelector('button:has-text("New note")', { timeout: 25_000 });
+  await page.waitForTimeout(2000);
+
+  const afterRecovery = await page.evaluate(() => {
+    const body = document.body.innerText;
+    return {
+      list: body,
+      rebindNotice: /recovery code/i.test(body) && /authenticator/i.test(body),
+      opened: [...document.querySelectorAll(".note-list button")].length,
+    };
+  });
+  check("a recovery code signs in", true);
+  check(
+    "a recovery code unlocks the key material",
+    afterRecovery.opened >= 1,
+    `${afterRecovery.opened} note(s) listed`,
+  );
+  check(
+    "a recovery login asks for a new authenticator (§3)",
+    afterRecovery.rebindNotice,
+    afterRecovery.rebindNotice ? "" : "no notice found",
+  );
+
+  // The note's text must be readable, which is the part a session alone cannot prove.
+  await page.click(".note-list button");
+  await page.waitForTimeout(2000);
+  const decrypted = await page.evaluate(() => document.body.innerText);
+  check("the note decrypts after a recovery login", /文本与结构|Markdown|Untitled/.test(decrypted));
+
+  // 8. Diagrams render in place in the visual editor, not only in the preview.
+  if (await page.$(".cm-content")) {
+    await page.getByRole("button", { name: "WYSIWYG", exact: true }).click();
+    await page.waitForTimeout(7000);
+  }
+  const inPlace = await page.evaluate(() => ({
+    diagrams: document.querySelectorAll(".wysiwyg-editor .diagram-preview svg").length,
+    katex: document.querySelectorAll(".wysiwyg-editor .katex").length,
+  }));
+  check("formulas render in place in the editor", inPlace.katex > 0, `${inPlace.katex}`);
+  check("diagrams render in place in the editor", inPlace.diagrams > 0, `${inPlace.diagrams}`);
+
+  // 9. Replace the authenticator from the recovery session (§3), then sign in with the new one. The
+  //    full circle is what proves the recovery path is a way back in rather than a dead end.
+  const rebindPrompt = await page.$('[aria-label="Set up a new authenticator"]');
+  check("a recovery login offers to replace the authenticator (§3)", rebindPrompt !== null);
+  if (rebindPrompt) {
+    await page.getByRole("button", { name: /generate a new secret/i }).click();
+    const newSecret =
+      (await page.getByTestId("rebind-secret").textContent({ timeout: 20_000 }))?.trim() ?? "";
+    check(
+      "the rebind shows a new authenticator secret",
+      newSecret.length >= 16,
+      `${newSecret.length} chars`,
+    );
+
+    await page.fill('input[aria-label="New authenticator code"]', totpFromBase32(newSecret));
+    await page.getByRole("button", { name: /replace my authenticator/i }).click();
+    await page.waitForTimeout(4000);
+
+    const afterRebind = await page.evaluate(() => document.body.innerText);
+    check(
+      "finishing a rebind signs the device out again",
+      /sign in|signed out|replaced/i.test(afterRebind),
+      afterRebind.slice(0, 80).replace(/\n+/g, " "),
+    );
+  }
+
+  // 10. The app's own errors.
   const ownPageErrors = pageErrors.filter((message) => !EMBED_ORIGINATED.test(message));
   const ownConsoleErrors = consoleErrors.filter((message) => !EMBED_ORIGINATED.test(message));
   check(

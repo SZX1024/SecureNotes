@@ -2,9 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ApiError, apiRequest } from "./api/client";
 import {
+  beginTotpRebind,
+  completeTotpRebind,
   enrolAccount,
   forgetLocalKeys,
   signIn,
+  verifyTotpRebind,
+  type StartedRebind,
+  signInWithRecoveryCode,
   unlockWithDeviceKey,
   type UnlockedAccount,
 } from "./app/flows";
@@ -20,7 +25,12 @@ import { KeyStore } from "./local/key-store";
 import type { SecureNotesDatabase } from "./local/schema";
 import { NoteSearchIndex, highlightSegments } from "./search";
 import { defaultEditorMode, loadEditorMode, saveEditorMode, type EditorMode } from "./editor/mode";
-import { decideDrop, decidePaste } from "./editor/paste";
+import {
+  decideDrop,
+  decidePaste,
+  loadRichTextPreference,
+  saveRichTextPreference,
+} from "./editor/paste";
 import { uploadAttachment } from "./data/attachments-client";
 import { syncAttachmentLinks } from "./data/attachments-client";
 import { ATTACHMENT_URL_PREFIX, attachmentRefsIn, diffAttachmentRefs } from "./editor/attachments";
@@ -91,8 +101,12 @@ export function App() {
   const [theme, setTheme] = useState<ThemePreference>(() =>
     typeof localStorage === "undefined" ? "system" : loadThemePreference(localStorage),
   );
-  const [richTextPreference, setRichTextPreference] = useState<"html" | "plain" | null>(null);
+  const [richTextPreference, setRichTextPreference] = useState<"html" | "plain" | null>(() =>
+    typeof localStorage === "undefined" ? null : loadRichTextPreference(localStorage),
+  );
   const [pastePrompt, setPastePrompt] = useState<{ html: string; text: string } | null>(null);
+  /** §3: a recovery login has no authenticator to return to, so it asks for a new one. */
+  const [mustRebind, setMustRebind] = useState(false);
   /** The references the note had when it was opened, for the save-time diff. */
   const [openedRefs, setOpenedRefs] = useState<string[]>([]);
   const [editorMode, setEditorMode] = useState<EditorMode>(() =>
@@ -390,6 +404,31 @@ export function App() {
     [account, draft, handleRevocation],
   );
 
+  /**
+   * Applies the remembered rich-text choice.
+   *
+   * The conversion sanitizes before it converts (§12), and the result goes into the note like any
+   * other text: stored as Markdown, and sanitized again when it is rendered.
+   */
+  const applyRichText = useCallback(
+    async (html: string, remember: boolean) => {
+      try {
+        const { htmlToMarkdown } = await import("./editor/rich-text");
+        const markdown = await htmlToMarkdown(html);
+        if (markdown.length > 0) {
+          insertIntoDraft(`${markdown}\n`);
+        }
+        if (remember) {
+          setRichTextPreference("html");
+          saveRichTextPreference(localStorage, "html");
+        }
+      } catch (error) {
+        setMessage(error instanceof Error ? error.message : "The paste could not be converted.");
+      }
+    },
+    [insertIntoDraft],
+  );
+
   /** Applies the paste rules (§12). */
   const handlePaste = useCallback(
     (event: React.ClipboardEvent) => {
@@ -412,12 +451,12 @@ export function App() {
       } else if (decision.kind === "attach-image") {
         void uploadImages([decision.file]);
       } else if (decision.kind === "insert-html") {
-        setMessage("Sanitised rich-text conversion is not wired yet (HANDOFF §19.6).");
+        void applyRichText(decision.html, false);
       } else {
         setMessage(decision.reason);
       }
     },
-    [insertIntoDraft, richTextPreference, uploadImages],
+    [insertIntoDraft, richTextPreference, uploadImages, applyRichText],
   );
 
   /** Applies the drop rules (§12: images only, with a size limit). */
@@ -570,7 +609,8 @@ export function App() {
         <LoginScreen
           db={db}
           message={message}
-          onSignedIn={async (unlocked) => {
+          onSignedIn={async (unlocked, mustRebindTotp) => {
+            setMustRebind(mustRebindTotp);
             setAccount(unlocked);
             keyStore.unlock(
               {
@@ -849,6 +889,19 @@ export function App() {
         </div>
       )}
 
+      {mustRebind && account && (
+        <RebindTotpPrompt
+          account={account}
+          onFinished={async (notice) => {
+            setMustRebind(false);
+            // Every session was revoked by the server, so the app must authenticate again.
+            await lockAndForget("signed-out");
+            setMessage(notice);
+          }}
+          onLater={() => setMustRebind(false)}
+        />
+      )}
+
       {pastePrompt && (
         <div className="palette" role="dialog" aria-label="Paste rich text">
           <p>This paste came from a web page. How should it be inserted?</p>
@@ -856,11 +909,22 @@ export function App() {
             type="button"
             onClick={() => {
               setRichTextPreference("plain");
+              saveRichTextPreference(localStorage, "plain");
               insertIntoDraft(pastePrompt.text);
               setPastePrompt(null);
             }}
           >
             Plain text
+          </button>
+          <button
+            type="button"
+            className="primary"
+            onClick={() => {
+              void applyRichText(pastePrompt.html, true);
+              setPastePrompt(null);
+            }}
+          >
+            Keep formatting
           </button>
           <button type="button" onClick={() => setPastePrompt(null)}>
             Cancel
@@ -981,6 +1045,115 @@ function MarkdownPreview({ title, body }: { title: string; body: string }) {
   return <div className="preview" ref={container} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
+/**
+ * Reconfigures the authenticator after a recovery login (§3).
+ *
+ * The server reports `mustRebindTotp` on that path, because the authenticator the user had is gone by
+ * definition. Completing the rebind revokes every session including this one, so the app returns to
+ * the sign-in screen and the user continues with a code from the new authenticator.
+ *
+ * The existing recovery codes stay valid: a rebind re-wraps the same DEK, and their wrappings are
+ * derived from the codes themselves. That is stated on screen, because "I changed my authenticator,
+ * are my printed codes still good?" is exactly the question a user will have.
+ */
+function RebindTotpPrompt({
+  account,
+  onFinished,
+  onLater,
+}: {
+  account: UnlockedAccount;
+  onFinished: (message: string) => Promise<void>;
+  onLater: () => void;
+}) {
+  const [started, setStarted] = useState<StartedRebind | null>(null);
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const begin = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      setStarted(await beginTotpRebind());
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The change could not be started.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const finish = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setError(null);
+    const verified = await verifyTotpRebind(code);
+    if (!verified) {
+      setBusy(false);
+      setError("That code was not accepted.");
+      return;
+    }
+    try {
+      await completeTotpRebind({ account, verified });
+      await onFinished(
+        "Your authenticator was replaced and every device was signed out. Sign in with a code from the new authenticator.",
+      );
+    } catch (caught) {
+      setBusy(false);
+      setError(caught instanceof Error ? caught.message : "The change could not be completed.");
+    }
+  };
+
+  return (
+    <div className="palette" role="dialog" aria-label="Set up a new authenticator">
+      <h2>Set up a new authenticator</h2>
+      <p className="muted">
+        You signed in with a recovery code, so the previous authenticator entry is no longer usable
+        for this account.
+      </p>
+
+      {started === null ? (
+        <>
+          <button type="button" className="primary" disabled={busy} onClick={() => void begin()}>
+            {busy ? "Preparing…" : "Generate a new secret"}
+          </button>
+          <button type="button" onClick={onLater}>
+            Remind me later
+          </button>
+        </>
+      ) : (
+        <form onSubmit={finish}>
+          <p>Add this to your authenticator app, then enter a code from it:</p>
+          <label className="field">
+            <span>Authenticator URI</span>
+            <code data-testid="rebind-uri">{started.totpUri}</code>
+          </label>
+          <label className="field">
+            <span>Or type this secret</span>
+            <code data-testid="rebind-secret">{started.totpSecretBase32}</code>
+          </label>
+          <label className="field">
+            <span>Code from the new authenticator</span>
+            <input
+              value={code}
+              inputMode="numeric"
+              aria-label="New authenticator code"
+              onChange={(event) => setCode(event.target.value)}
+            />
+          </label>
+          <button type="submit" className="primary" disabled={busy}>
+            {busy ? "Finishing…" : "Replace my authenticator"}
+          </button>
+          <p className="muted">
+            Your existing recovery codes keep working: the underlying key does not change. Every
+            device, including this one, will be signed out when you finish.
+          </p>
+        </form>
+      )}
+      {error && <p className="error">{error}</p>}
+    </div>
+  );
+}
+
 /** Highlights search terms as plain text: no markup is ever injected (§11). */
 function renderHighlighted(text: string, query: string) {
   const title = text.length > 0 ? text : "Untitled";
@@ -1072,17 +1245,27 @@ function SetupScreen({
   );
 }
 
+/**
+ * Sign-in (§3).
+ *
+ * Two ways in, because the second one exists for the day the first stops working: a current
+ * authenticator code, or one of the ten recovery codes. The recovery path derives the KEK from the
+ * code itself, since the TOTP secret is what the user has lost — and it always asks for a new
+ * authenticator afterwards.
+ */
 function LoginScreen({
   onSignedIn,
   message,
   db,
 }: {
-  onSignedIn: (account: UnlockedAccount) => Promise<void>;
+  onSignedIn: (account: UnlockedAccount, mustRebindTotp: boolean) => Promise<void>;
   message: string | null;
   db: SecureNotesDatabase;
 }) {
   const [username, setUsername] = useState("");
   const [code, setCode] = useState("");
+  const [recoveryCode, setRecoveryCode] = useState("");
+  const [useRecoveryCode, setUseRecoveryCode] = useState(false);
   const [rememberDevice, setRememberDevice] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1091,13 +1274,37 @@ function LoginScreen({
     event.preventDefault();
     setBusy(true);
     setError(null);
+
+    if (useRecoveryCode) {
+      const recovered = await signInWithRecoveryCode({
+        username,
+        code: recoveryCode,
+        rememberDevice,
+        db,
+      }).catch((caught: unknown) => {
+        setError(caught instanceof Error ? caught.message : "The recovery code was not accepted.");
+        return null;
+      });
+      setBusy(false);
+      if (!recovered) {
+        setError(
+          (current) => current ?? "That recovery code was not accepted, or it was already used.",
+        );
+        return;
+      }
+      // The notice is carried into the app: after a recovery login the authenticator is gone by
+      // definition.
+      await onSignedIn(recovered.account, recovered.mustRebindTotp);
+      return;
+    }
+
     const result = await signIn({ username, code, rememberDevice, db }).catch(() => null);
     setBusy(false);
     if (!result) {
       setError("Those credentials were not accepted.");
       return;
     }
-    await onSignedIn(result.account);
+    await onSignedIn(result.account, false);
   };
 
   return (
@@ -1112,15 +1319,34 @@ function LoginScreen({
           aria-label="Username"
         />
       </label>
-      <label className="field">
-        <span>Authenticator code</span>
-        <input
-          value={code}
-          inputMode="numeric"
-          onChange={(event) => setCode(event.target.value)}
-          aria-label="Authenticator code"
-        />
-      </label>
+
+      {useRecoveryCode ? (
+        <label className="field">
+          <span>Recovery code</span>
+          <p className="muted">
+            One of the ten codes from enrolment. Each can be used once, and using one asks you to
+            set up a new authenticator.
+          </p>
+          <input
+            value={recoveryCode}
+            onChange={(event) => setRecoveryCode(event.target.value)}
+            aria-label="Recovery code"
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </label>
+      ) : (
+        <label className="field">
+          <span>Authenticator code</span>
+          <input
+            value={code}
+            inputMode="numeric"
+            onChange={(event) => setCode(event.target.value)}
+            aria-label="Authenticator code"
+          />
+        </label>
+      )}
+
       <label className="checkbox">
         <input
           type="checkbox"
@@ -1129,8 +1355,20 @@ function LoginScreen({
         />
         <span>Remember this device for offline access</span>
       </label>
+
       <button type="submit" className="primary" disabled={busy}>
-        {busy ? "Signing in…" : "Sign in"}
+        {busy ? "Signing in…" : useRecoveryCode ? "Sign in with a recovery code" : "Sign in"}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setUseRecoveryCode((current) => !current);
+          setError(null);
+        }}
+      >
+        {useRecoveryCode
+          ? "Use my authenticator instead"
+          : "Lost your authenticator? Use a recovery code"}
       </button>
       {error && <p className="error">{error}</p>}
     </form>

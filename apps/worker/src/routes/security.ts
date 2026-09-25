@@ -39,6 +39,20 @@ const rebindVerifySchema = z
 
 const rebindSimpleSchema = z.object({ nonce: nonceSchema }).strict();
 
+/**
+ * Completing a rebind differs from the enrolment upload in one way: the recovery wrappings may be
+ * omitted, which keeps the stored ones. The codes and the DEK are unchanged by a rebind, so they stay
+ * the way back in — and this path is taken by someone who may have no codes to hand, because they
+ * signed in with one.
+ */
+const rebindCompleteSchema = keyMaterialSchema
+  .omit({ recoveryWrappings: true })
+  .extend({
+    nonce: nonceSchema,
+    recoveryWrappings: keyMaterialSchema.shape.recoveryWrappings.optional(),
+  })
+  .strict();
+
 /** Issues a nonce bound to this user, this session and this operation. */
 securityRoutes.post("/security/operation-nonce", requireSession(), requireCsrf(), async (c) => {
   const session = c.get("session")!;
@@ -234,7 +248,7 @@ securityRoutes.post(
   async (c) => {
     const session = c.get("session")!;
     const now = Date.now();
-    const body = await parseJsonBody(c, keyMaterialRequestSchema);
+    const body = await parseJsonBody(c, rebindCompleteSchema);
 
     const spent = await consumeNonce(
       c.env,
