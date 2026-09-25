@@ -3,6 +3,7 @@ import { MAX_FOLDER_DEPTH, type CryptoEnvelope } from "@securenotes/shared";
 import type { Env } from "../env";
 import { ApiError } from "../lib/api-error";
 import { syncChangeStatement } from "./records";
+import { recordConflict } from "./conflicts";
 
 /**
  * Folders (§9, §10).
@@ -28,6 +29,7 @@ export interface FolderRow {
   crypto_version: number;
   key_version: number;
   sort_order: number;
+  revision: number;
   deleted_at: number | null;
   created_at: number;
   updated_at: number;
@@ -38,6 +40,8 @@ export function serializeFolder(row: FolderRow) {
     id: row.id,
     parentId: row.parent_id,
     depth: row.depth,
+    /** The revision an edit has to be based on (§16). */
+    revision: row.revision,
     name: {
       crypto_version: row.crypto_version,
       key_version: row.key_version,
@@ -167,12 +171,50 @@ export async function updateFolder(
   env: Env,
   userId: string,
   id: string,
-  input: { name?: CryptoEnvelope; parentId?: string | null; sortOrder?: number },
+  input: {
+    name?: CryptoEnvelope;
+    parentId?: string | null;
+    sortOrder?: number;
+    baseRevision?: number;
+  },
   nowMs: number,
 ): Promise<FolderRow> {
   const existing = await findFolder(env, userId, id);
   if (!existing || existing.deleted_at !== null) {
     throw new ApiError("NOT_FOUND");
+  }
+
+  if (input.baseRevision !== undefined && existing.revision !== input.baseRevision) {
+    // §16: a folder move that was based on a revision the server has moved past becomes a conflict. The
+    // name envelope stands in for the folder's content, which is what the two sides are compared on.
+    await recordConflict(
+      env,
+      {
+        userId,
+        objectType: "folder",
+        objectId: id,
+        baseRevision: input.baseRevision,
+        local: input.name ?? {
+          crypto_version: existing.crypto_version,
+          key_version: existing.key_version,
+          alg: "AES-256-GCM",
+          iv: existing.name_iv,
+          ciphertext: existing.name_ciphertext,
+        },
+        remote: {
+          crypto_version: existing.crypto_version,
+          key_version: existing.key_version,
+          alg: "AES-256-GCM",
+          iv: existing.name_iv,
+          ciphertext: existing.name_ciphertext,
+        },
+        remoteRevision: existing.revision,
+      },
+      nowMs,
+    );
+    throw new ApiError("REVISION_CONFLICT", {
+      diagnostic: `expected revision ${input.baseRevision}, found ${existing.revision}`,
+    });
   }
 
   const statements = [];
@@ -247,12 +289,21 @@ export async function updateFolder(
     );
   }
 
+  // One revision per accepted write, whatever it changed: the revision is what the next edit is compared
+  // against, so it has to move even for a rename.
+  statements.push(
+    env.DB.prepare(
+      "UPDATE folders SET revision = revision + 1, updated_at = ?3 WHERE id = ?1 AND user_id = ?2",
+    ).bind(id, userId, nowMs),
+  );
+
   statements.push(
     syncChangeStatement(env, {
       userId,
       objectType: "folder",
       objectId: id,
       changeType: "update",
+      revision: existing.revision + 1,
       changedAt: nowMs,
     }),
   );

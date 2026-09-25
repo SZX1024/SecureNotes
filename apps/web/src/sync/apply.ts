@@ -115,6 +115,7 @@ export async function applyRemoteChange(
       id: change.objectId,
       parentId: payload.parentId ?? null,
       depth: payload.depth ?? existing?.depth ?? 1,
+      revision: change.revision ?? existing?.revision ?? 1,
       name: payload.name as never,
       deletedAt: null,
       sortOrder: payload.sortOrder ?? 0,

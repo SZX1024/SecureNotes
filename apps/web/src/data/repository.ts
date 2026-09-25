@@ -194,6 +194,7 @@ export async function createLocalFolder(
     id: input.id,
     parentId: input.parentId ?? null,
     depth: existingDepth + 1,
+    revision: 1,
     name,
     deletedAt: null,
     sortOrder: 0,
@@ -217,11 +218,11 @@ export async function readLocalFolderName(
   context: LocalContext,
   folder: LocalFolder,
 ): Promise<string> {
-  // Folders have no revision, so their names are bound at revision 1 — the same
-  // value used when they were encrypted.
+  // Bound to the folder's own revision: the AAD includes it, so decrypting with any other number would
+  // fail — which is what makes a stale name envelope detectable rather than silently wrong.
   const plaintext = await decryptObject(
     context.dek,
-    aadFor("folder", folder.id, 1, folder.name.key_version),
+    aadFor("folder", folder.id, folder.revision, folder.name.key_version),
     folder.name,
   );
   return new TextDecoder().decode(plaintext);

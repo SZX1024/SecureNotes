@@ -1268,3 +1268,27 @@ ok  the interface reports a sync state (§17) (Synced)
 
 **诊断信息现在只在失败时打印**（请求记录、面板内容），通过时保持安静 —— 但它们保留着，
 因为上一批的三个同步缺陷正是靠它们定位的。
+
+## 28. P7 收尾：文件夹修订与冲突（§16 最后一条）
+
+§16 明确要求「**Folder movement conflicts enter conflict state**」。而实现里 `folders` 表**没有修订号**、
+`PATCH /folders/:id` **没有 baseRevision** —— 也就是说**文件夹移动此前是 last-write-wins**，
+正是 §16 唯一明令排除的东西。这不是「锦上添花」，是未满足的需求。
+
+**服务端**（迁移 `0005_folder_revisions.sql`：`folders.revision INTEGER NOT NULL DEFAULT 1`）：
+
+- 携带 `baseRevision` 的更新若与服务端修订不符 → **记录冲突**（`objectType: "folder"`，两侧用名称信封代表
+  文件夹的「内容」）并抛 `REVISION_CONFLICT`；`baseRevision` 可选，普通调用者不受影响。
+- **每次被接受的写入都推进一个修订**（改名与移动都算），因为修订是下一次编辑的比较基准。
+- `serializeFolder` 输出 `revision`；同步变更行带上新修订。
+- **解决**扩展到文件夹：把选中的名称信封写成 `remote_revision + 1`，并**同样写同步变更行**，
+  否则没参与冲突的设备永远不知道文件夹动了。
+
+**客户端**：`LocalFolder.revision`（本地 schema **v4** + 迁移默认 1），文件夹名称信封的 AAD 改用
+**文件夹自己的修订**（此前硬编码为 1）；应用远端文件夹时保留其修订。
+
+**测试**：worker 新增 4 项（过期移动→冲突且两侧保留 · 每次更新推进修订 · 不带 baseRevision 仍可用 ·
+文件夹冲突解决写入新修订并出现在变更流）；web 268 项（含 v4 迁移）。
+
+**过程中我自己制造并修掉的一个缺陷**：我把 v4 的定义**插在 v3 之前**，而 Dexie 按声明顺序读取版本
+—— 于是「已是最新版本时不迁移」的测试失败（它其实是对的）。移到末尾后恢复。这条测试的价值正在于此。

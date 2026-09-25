@@ -35,6 +35,8 @@ export interface LocalFolder {
   id: string;
   parentId: string | null;
   depth: number;
+  /** The revision the name envelope was encrypted under (§16). */
+  revision: number;
   name: CryptoEnvelope;
   deletedAt: number | null;
   sortOrder: number;
@@ -157,6 +159,23 @@ export const SCHEMA_DEFINITIONS: readonly SchemaDefinition[] = [
     // manual order). The indexes are unchanged: this is a row-shape change, and
     // the migration supplies the defaults for existing rows.
     version: 3,
+    stores: {
+      notes: "id, folderId, updatedAt, deletedAt, syncedAt",
+      folders: "id, parentId, updatedAt, syncedAt",
+      tags: "id, updatedAt, syncedAt",
+      noteTags: "[noteId+tagId], noteId, tagId",
+      attachments: "id, syncedAt, cachedAt",
+      syncQueue: "++id, objectId, queuedAt, nextAttemptAt",
+      keyMaterial: "id",
+      deviceKeys: "id",
+      meta: "key",
+    },
+  },
+  {
+    // Version 4 gives folders a revision, so a folder move can be compared against the one it was based
+    // on instead of overwriting (§16). Like version 3 this is a row-shape change, and the migration
+    // supplies the default for existing rows.
+    version: 4,
     stores: {
       notes: "id, folderId, updatedAt, deletedAt, syncedAt",
       folders: "id, parentId, updatedAt, syncedAt",

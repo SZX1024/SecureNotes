@@ -124,6 +124,13 @@ export const UPGRADES: Readonly<Record<number, RowTransform>> = {
     }
     return row;
   },
+  // 3 -> 4: folders gain a revision. An existing folder has only ever had one.
+  4: (table, row) => {
+    if (table === "folders") {
+      return { revision: 1, ...row };
+    }
+    return row;
+  },
   // 2 -> 3: notes gain pinning and manual order. Existing notes are not pinned
   // and keep insertion order, which is what the defaults express.
   3: (table, row) => {

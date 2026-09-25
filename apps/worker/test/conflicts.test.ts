@@ -299,3 +299,108 @@ describe("conflicts (§16)", () => {
     expect(again.status).toBe(412);
   });
 });
+
+describe("folder conflicts (§16)", () => {
+  /** Creates a folder and returns the revision the server assigned it. */
+  async function createFolder(id: string) {
+    const response = await authedRequest<{ ok: true; data: { folder: { revision: number } } }>(
+      "/folders",
+      jar,
+      {
+        method: "POST",
+        body: { id, parentId: null, name: envelope("Zm9sZGVy") },
+      },
+    );
+    expect(response.status, JSON.stringify(response.body)).toBe(201);
+    return response.body.data.folder.revision;
+  }
+
+  it("records a conflict when a move is based on a stale revision", async () => {
+    const id = nextId();
+    const revision = await createFolder(id);
+    // Somewhere else the folder is renamed.
+    await authedRequest(`/folders/${id}`, jar, {
+      method: "PATCH",
+      body: { baseRevision: revision, name: envelope("cmVuYW1lZA==") },
+    });
+
+    const stale = await authedRequest(`/folders/${id}`, jar, {
+      method: "PATCH",
+      body: { baseRevision: revision, parentId: null },
+    });
+
+    // A folder move is no longer last-write-wins: it becomes a conflict with both sides kept.
+    expect(stale.status).toBe(409);
+    const open = (await conflicts()).filter((entry) => entry.objectId === id);
+    expect(open).toHaveLength(1);
+    expect(open[0]!.baseRevision).toBe(revision);
+  });
+
+  it("advances the revision on every accepted update", async () => {
+    const id = nextId();
+    const first = await createFolder(id);
+
+    const renamed = await authedRequest<{ ok: true; data: { folder: { revision: number } } }>(
+      `/folders/${id}`,
+      jar,
+      { method: "PATCH", body: { baseRevision: first, name: envelope("bmV3") } },
+    );
+
+    expect(renamed.status, JSON.stringify(renamed.body)).toBe(200);
+    expect(renamed.body.data.folder.revision).toBe(first + 1);
+  });
+
+  it("still accepts an update that carries no base revision", async () => {
+    // Not every caller is a syncing client, and the field is optional.
+    const id = nextId();
+    await createFolder(id);
+
+    const response = await authedRequest(`/folders/${id}`, jar, {
+      method: "PATCH",
+      body: { sortOrder: 3 },
+    });
+
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+  });
+
+  it("resolves a folder conflict by writing the chosen name as a new revision", async () => {
+    const id = nextId();
+    const revision = await createFolder(id);
+    await authedRequest(`/folders/${id}`, jar, {
+      method: "PATCH",
+      body: { baseRevision: revision, name: envelope("cmVtb3Rl") },
+    });
+    await authedRequest(`/folders/${id}`, jar, {
+      method: "PATCH",
+      body: { baseRevision: revision, name: envelope("bG9jYWw=") },
+    });
+    const conflict = (await conflicts()).find((entry) => entry.objectId === id)!;
+
+    const before = await authedRequest<{ ok: true; data: { cursor: number } }>(
+      "/sync/changes?since=0",
+      jar,
+    );
+    const resolved = await authedRequest(`/conflicts/${conflict.id}/resolve`, jar, {
+      method: "POST",
+      body: { resolution: "local", payload: envelope("bG9jYWw=") },
+    });
+
+    expect(resolved.status, JSON.stringify(resolved.body)).toBe(200);
+
+    const folder = await authedRequest<{
+      ok: true;
+      data: { folder: { revision: number; name: { ciphertext: string } } };
+    }>(`/folders/${id}`, jar);
+    expect(folder.body.data.folder.name.ciphertext).toBe("bG9jYWw=");
+    expect(folder.body.data.folder.revision).toBe(conflict.remoteRevision + 1);
+
+    // And other devices learn about it through the feed.
+    const after = await authedRequest<{
+      ok: true;
+      data: { changes: Array<{ objectType: string; objectId: string; revision: number | null }> };
+    }>(`/sync/changes?since=${before.body.data.cursor}`, jar);
+    const change = after.body.data.changes.find((entry) => entry.objectId === id);
+    expect(change?.objectType).toBe("folder");
+    expect(change?.revision).toBe(conflict.remoteRevision + 1);
+  });
+});

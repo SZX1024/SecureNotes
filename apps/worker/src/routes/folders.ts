@@ -42,6 +42,8 @@ const createSchema = z
 
 const updateSchema = z
   .object({
+    /** The revision this edit is based on; a mismatch becomes a conflict (§16). */
+    baseRevision: z.number().int().min(1).optional(),
     name: envelopeSchema.optional(),
     parentId: idSchema.nullable().optional(),
     sortOrder: z.number().int().min(0).optional(),
@@ -101,6 +103,7 @@ folderRoutes.patch("/folders/:id", requireSession(), requireCsrf(), async (c) =>
       ...(body.name === undefined ? {} : { name: body.name }),
       ...(body.parentId === undefined ? {} : { parentId: body.parentId }),
       ...(body.sortOrder === undefined ? {} : { sortOrder: body.sortOrder }),
+      ...(body.baseRevision === undefined ? {} : { baseRevision: body.baseRevision }),
     },
     Date.now(),
   );

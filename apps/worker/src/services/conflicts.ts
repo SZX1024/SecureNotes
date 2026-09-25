@@ -223,42 +223,75 @@ export async function resolveConflict(
         diagnostic: "keeping or merging requires the payload to keep",
       });
     }
-    if (conflict.object_type !== "note") {
+    // A folder's content is its name envelope; a note's is its payload. Either way the write is the
+    // revision after the one the conflict recorded, which is the revision the client re-encrypted under —
+    // and it is guarded by that revision, so a third state cannot be overwritten by a resolution.
+    if (conflict.object_type !== "note" && conflict.object_type !== "folder") {
       throw new ApiError("VALIDATION_FAILED", {
-        diagnostic: "only notes can be resolved this way",
+        diagnostic: "only notes and folders can be resolved this way",
       });
     }
 
-    const [written] = await env.DB.batch([
-      env.DB.prepare(
-        `UPDATE notes
-            SET revision = ?4, payload_iv = ?5, payload_ciphertext = ?6,
-                crypto_version = ?7, key_version = ?8, updated_at = ?9
-          WHERE id = ?1 AND user_id = ?2 AND revision = ?3 AND deleted_at IS NULL`,
-      ).bind(
-        conflict.object_id,
-        userId,
-        conflict.remote_revision,
-        conflict.remote_revision + 1,
-        payload.iv,
-        payload.ciphertext,
-        payload.crypto_version,
-        payload.key_version,
-        nowMs,
-      ),
-      // The resolution is a mutation like any other: without a change row, the devices that were not
-      // involved in the conflict would never learn that the note moved on.
-      syncChangeStatement(env, {
-        userId,
-        objectType: "note",
-        objectId: conflict.object_id,
-        changeType: "update",
-        revision: conflict.remote_revision + 1,
-        changedAt: nowMs,
-      }),
-    ]);
+    const nextRevision = conflict.remote_revision + 1;
+    const written =
+      conflict.object_type === "folder"
+        ? await env.DB.batch([
+            env.DB.prepare(
+              `UPDATE folders
+                  SET revision = ?4, name_iv = ?5, name_ciphertext = ?6,
+                      crypto_version = ?7, key_version = ?8, updated_at = ?9
+                WHERE id = ?1 AND user_id = ?2 AND revision = ?3 AND deleted_at IS NULL`,
+            ).bind(
+              conflict.object_id,
+              userId,
+              conflict.remote_revision,
+              nextRevision,
+              payload.iv,
+              payload.ciphertext,
+              payload.crypto_version,
+              payload.key_version,
+              nowMs,
+            ),
+            syncChangeStatement(env, {
+              userId,
+              objectType: "folder",
+              objectId: conflict.object_id,
+              changeType: "update",
+              revision: nextRevision,
+              changedAt: nowMs,
+            }),
+          ])
+        : await env.DB.batch([
+            env.DB.prepare(
+              `UPDATE notes
+                  SET revision = ?4, payload_iv = ?5, payload_ciphertext = ?6,
+                      crypto_version = ?7, key_version = ?8, updated_at = ?9
+                WHERE id = ?1 AND user_id = ?2 AND revision = ?3 AND deleted_at IS NULL`,
+            ).bind(
+              conflict.object_id,
+              userId,
+              conflict.remote_revision,
+              nextRevision,
+              payload.iv,
+              payload.ciphertext,
+              payload.crypto_version,
+              payload.key_version,
+              nowMs,
+            ),
+            // The resolution is a mutation like any other: without a change row, the devices that were
+            // not involved in the conflict would never learn that the object moved on.
+            syncChangeStatement(env, {
+              userId,
+              objectType: "note",
+              objectId: conflict.object_id,
+              changeType: "update",
+              revision: nextRevision,
+              changedAt: nowMs,
+            }),
+          ]);
 
-    if ((written!.meta.changes ?? 0) === 0) {
+    const affected = written[0]?.meta.changes ?? 0;
+    if (affected === 0) {
       return { kind: "stale" };
     }
   }
