@@ -206,6 +206,9 @@ try {
   // Taken from the URI the app displays rather than from any database: the run needs no access to a
   // developer's secrets, and this exercises the same value the user would scan.
   const base32Secret = /secret=([A-Z2-7]+)/.exec(totpUri ?? "")?.[1] ?? "";
+  // The secret that is current right now: replacing the authenticator later in the run changes it, and a check that
+  // signs in again has to use the one the account actually has.
+  let activeSecret = base32Secret;
   check(
     "enrolment shows an authenticator URI",
     Boolean(totpUri?.startsWith("otpauth://")),
@@ -1397,6 +1400,7 @@ print(json.dumps({
     await page.getByRole("button", { name: /generate a new secret/i }).click();
     const newSecret =
       (await page.getByTestId("rebind-secret").textContent({ timeout: 20_000 }))?.trim() ?? "";
+    activeSecret = newSecret;
     check(
       "the rebind shows a new authenticator secret",
       newSecret.length >= 16,
@@ -1486,6 +1490,98 @@ print(json.dumps({
       console.log(`       ${message.slice(0, 120)}`);
     }
   }
+  // 9e. The recycle bin (§19): deleting is a move rather than a loss, and both endings are reachable.
+  //
+  // Rows are counted by their Restore button rather than by `li`: an empty bin renders one `<li>` of its own saying so,
+  // and a check that counted elements instead of notes reported the same number before and after a successful restore.
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForTimeout(3000);
+  if (await page.$('input[aria-label="Authenticator code"]')) {
+    await page.fill('input[aria-label="Username"]', "e2e-account");
+    await page.fill('input[aria-label="Authenticator code"]', totpFromBase32(activeSecret));
+    await page.click('button[type="submit"]');
+  } else {
+    // By this point the device key exists, so a reload offers an offline unlock rather than a code.
+    const unlock = page.getByRole("button", { name: /unlock/i }).first();
+    if (await unlock.count()) {
+      await unlock.click();
+    }
+  }
+  await page.waitForSelector('button:has-text("New note")', { timeout: 25_000 });
+  await page.waitForTimeout(2500);
+
+  const listCount = () =>
+    page.evaluate(() => document.querySelectorAll(".note-list button").length);
+  const binRows = () => page.getByRole("button", { name: "Restore" }).count();
+  const openBin = async () => {
+    await openPanel(page, "Notes");
+    await page.getByRole("button", { name: "Recycle bin" }).click();
+    await page.waitForTimeout(2500);
+  };
+
+  await openPanel(page, "Notes");
+  const notesBefore = await listCount();
+
+  await page.getByRole("button", { name: "New note", exact: true }).first().click();
+  await page.waitForTimeout(3000);
+  const afterCreate = await listCount();
+  check(
+    "creating a note adds it to the list (§19)",
+    afterCreate === notesBefore + 1,
+    `${notesBefore} -> ${afterCreate}`,
+  );
+
+  await openFileMenuItem(page, /Move this note to the recycle bin/);
+  await page.waitForTimeout(3000);
+  const afterDelete = await listCount();
+  check(
+    "deleting a note takes it out of the list (§19)",
+    afterDelete === notesBefore,
+    `${afterCreate} -> ${afterDelete}`,
+  );
+
+  await openBin();
+  check("it is in the recycle bin, not gone (§19)", (await binRows()) === 1);
+
+  await page.getByRole("button", { name: "Restore" }).first().click();
+  await page.waitForTimeout(3500);
+  check("restoring takes it out of the bin (§19)", (await binRows()) === 0);
+
+  await page.getByRole("button", { name: "Back" }).click();
+  await page.waitForTimeout(2500);
+  const afterRestore = await listCount();
+  check(
+    "and it is back in the list (§19)",
+    afterRestore === notesBefore + 1,
+    `${afterDelete} -> ${afterRestore}`,
+  );
+
+  // The other ending asks twice before it does anything, so a mis-click cannot destroy a note.
+  await page.click(".note-list button");
+  await page.waitForTimeout(2000);
+  await openFileMenuItem(page, /Move this note to the recycle bin/);
+  await page.waitForTimeout(3000);
+  await openBin();
+  await page.getByRole("button", { name: "Delete permanently" }).first().click();
+  await page.waitForTimeout(700);
+  const confirmations = await page.getByRole("button", { name: "Delete for good?" }).count();
+  check(
+    "permanent deletion asks twice (§19)",
+    confirmations === 1,
+    `${confirmations} confirmation`,
+  );
+  await page.getByRole("button", { name: "Delete for good?" }).click();
+  await page.waitForTimeout(3500);
+  check("and then it is gone for good (§19)", (await binRows()) === 0);
+
+  await page.getByRole("button", { name: "Back" }).click();
+  await page.waitForTimeout(2500);
+  const finalCount = await listCount();
+  check(
+    "the list ends where it started (§19)",
+    finalCount === notesBefore,
+    `${afterRestore} -> ${finalCount}`,
+  );
 } catch (error) {
   failures.push(`  FAIL the run stopped early: ${String(error).slice(0, 300)}`);
   await page.screenshot({ path: `${SHOTS}/e2e-fatal.png` }).catch(() => undefined);
