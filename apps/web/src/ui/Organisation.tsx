@@ -352,7 +352,7 @@ export function NoteOrganisation({
         </legend>
         {tags.length === 0 && <p className="muted">No tags yet.</p>}
         {tags.map((tag) => (
-          <label key={tag.id} className="checkbox">
+          <label key={tag.id} className="checkbox chip-toggle">
             <input
               type="checkbox"
               checked={tagIds.includes(tag.id)}

@@ -64,6 +64,7 @@ import { MenuBar, type MenuDefinition } from "./ui/MenuBar";
 import { SettingsDialog } from "./ui/SettingsDialog";
 import { StatusBar } from "./ui/StatusBar";
 import { Tabs, type TabView } from "./ui/Tabs";
+import { snippetOf } from "./ui/note-snippet";
 import { addTab, isDirty, loadTabs, neighbourAfterClose, removeTab, saveTabs } from "./ui/tabs";
 import { applyTypography, loadTypography, saveTypography, type Typography } from "./ui/typography";
 import { FolderTree, NoteOrganisation, TagList } from "./ui/Organisation";
@@ -1584,6 +1585,10 @@ export function App() {
         createdAt: entry.note.createdAt,
         pinned: entry.note.pinned,
         sortOrder: entry.note.sortOrder,
+        // The row shows what the note says as well as what it is called: a title identifies a note you had in mind,
+        // and the opening words identify the one you had forgotten.
+        snippet: snippetOf(entry.document.body),
+        folderName: folderRows.find((row) => row.id === entry.note.folderId)?.name ?? null,
       }));
 
     return sortNotes(decorated, sortKey);
@@ -1894,9 +1899,20 @@ export function App() {
             {visibleNotes.map((note) => (
               <li key={note.id} className={note.id === selectedId ? "selected" : ""}>
                 <button type="button" onClick={() => openNote(note.id)}>
-                  <span className="title">{renderHighlighted(note.title, query)}</span>
-                  {note.pinned && <span title="Pinned">📌</span>}
-                  <span className="muted">{new Date(note.updatedAt).toLocaleDateString()}</span>
+                  <span className="row-head">
+                    <span className="title">{renderHighlighted(note.title, query)}</span>
+                    {note.pinned && <span title="Pinned">📌</span>}
+                    <span className="muted">{new Date(note.updatedAt).toLocaleDateString()}</span>
+                  </span>
+                  {note.snippet.length > 0 && <span className="snippet">{note.snippet}</span>}
+                  {note.folderName !== null && (
+                    <span className="row-chips">
+                      <span className="chip">
+                        <Icon name="folder" size={12} />
+                        {note.folderName}
+                      </span>
+                    </span>
+                  )}
                 </button>
               </li>
             ))}

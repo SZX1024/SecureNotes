@@ -1187,3 +1187,61 @@ button.status-item:hover:not(:disabled) {
   background: transparent;
   border: 0;
 }
+
+/* Note rows (§22): the title identifies a note you had in mind, the opening words identify the one you had forgotten. */
+.note-list button {
+  display: grid;
+  gap: var(--space-1);
+  align-items: start;
+}
+
+.note-list .row-head {
+  display: flex;
+  gap: var(--space-3);
+  align-items: baseline;
+}
+
+.note-list .snippet {
+  overflow: hidden;
+  font-size: var(--text-xs);
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-list .row-chips {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/* Chips: one shape for a folder on a row, an attachment, and a tag in the editor. */
+.chip {
+  display: inline-flex;
+  gap: var(--space-2);
+  align-items: center;
+  padding: 1px var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--muted);
+  background: var(--bg-active);
+  border: 1px solid transparent;
+  border-radius: 999px;
+}
+
+/* A tag that can be toggled keeps its checkbox semantics — it is a set membership — and loses the browser's own box. */
+.chip-toggle {
+  padding: 1px var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.chip-toggle:has(input:checked) {
+  color: var(--text-strong);
+  background: var(--bg-selected);
+  border-color: var(--accent);
+}
+
+.chip-toggle input {
+  min-height: 0;
+  margin: 0;
+}
