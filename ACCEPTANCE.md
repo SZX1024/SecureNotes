@@ -16,9 +16,9 @@ opening the file. Regenerating it is part of the gate: an item whose evidence di
 | Authentication | 40-minute inactivity policy works | ✅ | `apps/worker/test/sessions.test.ts:83` |
 | Authentication | Remember-device never bypasses TOTP | ✅ | `apps/worker/test/sessions.test.ts:145` |
 | Encryption | Note plaintext never reaches Worker/D1/R2 | ✅ | `apps/worker/test/notes.test.ts:113` |
-| Encryption | Folder names are encrypted | ✅ | `apps/web/src/data/local-data.test.ts:182` |
-| Encryption | Tag names are encrypted | ✅ | `apps/web/src/data/local-data.test.ts:182` |
-| Encryption | Note title/body are encrypted | ✅ | `apps/web/src/data/local-data.test.ts:98` |
+| Encryption | Folder names are encrypted | ✅ | `apps/web/src/data/local-data.test.ts:183` |
+| Encryption | Tag names are encrypted | ✅ | `apps/web/src/data/local-data.test.ts:183` |
+| Encryption | Note title/body are encrypted | ✅ | `apps/web/src/data/local-data.test.ts:99` |
 | Encryption | Attachment original filenames are encrypted | ✅ | `apps/web/src/data/attachments-client.test.ts:340` |
 | Encryption | AES-256-GCM is implemented correctly | ✅ | `packages/shared/test/format.test.ts:21` |
 | Encryption | Fresh 96-bit IV per encryption (§31 replay) | ✅ | `packages/shared/test/crypto.test.ts:64` |
@@ -27,10 +27,10 @@ opening the file. Regenerating it is part of the gate: an item whose evidence di
 | Encryption | Recovery can recover DEK | ✅ | `apps/worker/test/crypto-flow.test.ts:38` |
 | Encryption | TOTP change can migrate all data | ✅ | `apps/worker/test/crypto-flow.test.ts:332` |
 | Encryption | Interrupted migration can resume or roll back safely (§31 TOTP migration) | ✅ | `apps/worker/test/crypto-flow.test.ts:304` |
-| Offline | Full offline note editing works | ✅ | `apps/web/src/data/local-data.test.ts:206` |
-| Offline | Folder/tag operations work offline | ✅ | `apps/web/src/data/local-data.test.ts:507` |
+| Offline | Full offline note editing works | ✅ | `apps/web/src/data/local-data.test.ts:207` |
+| Offline | Folder/tag operations work offline | ✅ | `apps/web/src/data/local-data.test.ts:508` |
 | Offline | Image operations work offline | ✅ | `scripts/e2e/browser.spec.mjs:1265` |
-| Offline | Unsynced operations survive normal application restarts (§31 offline queue persistence) | ✅ | `apps/web/src/data/local-data.test.ts:552` |
+| Offline | Unsynced operations survive normal application restarts (§31 offline queue persistence) | ✅ | `apps/web/src/data/local-data.test.ts:553` |
 | Offline | Unsynced data is never automatically evicted (§31 cache eviction) | ✅ | `apps/web/src/local/local-layer.test.ts:295` |
 | Offline | App Lock works | ✅ | `apps/web/src/local/local-layer.test.ts:165` |
 | Offline | Revoked Sessions cause local cache/key deletion when detected | ✅ | `apps/web/src/local/local-layer.test.ts:119` |

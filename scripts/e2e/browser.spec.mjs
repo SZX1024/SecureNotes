@@ -453,7 +453,7 @@ try {
   );
 
   // The note's text must be readable, which is the part a session alone cannot prove.
-  await page.click(".note-list button");
+  await page.locator(".note-list button").first().click();
   await page.waitForTimeout(2000);
   const decrypted = await page.evaluate(() => document.body.innerText);
   check("the note decrypts after a recovery login", /文本与结构|Markdown|Untitled/.test(decrypted));
@@ -549,7 +549,7 @@ try {
 
       // The first device edits from a revision the server has moved past. That is a conflict, and it must
       // neither be applied nor silently overwrite the other edit.
-      await page.click(".note-list button");
+      await page.locator(".note-list button").first().click();
       await page.waitForTimeout(1500);
       if (await page.$(".wysiwyg-editor")) {
         await clickEditorButton(page, "Markdown source");
@@ -1600,7 +1600,7 @@ print(json.dumps({
   const pressSave = () => clickEditorButton(page, /save/i);
 
   await openPanel(page, "Notes");
-  await page.click(".note-list button");
+  await page.locator(".note-list button").first().click();
   await page.waitForTimeout(2500);
   await page.getByLabel("Note title").fill("First tab note");
   await pressSave();
@@ -1738,7 +1738,7 @@ print(json.dumps({
   );
 
   // The other ending asks twice before it does anything, so a mis-click cannot destroy a note.
-  await page.click(".note-list button");
+  await page.locator(".note-list button").first().click();
   await page.waitForTimeout(2000);
   await openFileMenuItem(page, /Move this note to the recycle bin/);
   await page.waitForTimeout(3000);
@@ -1763,6 +1763,62 @@ print(json.dumps({
     finalCount === notesBefore,
     `${afterRestore} -> ${finalCount}`,
   );
+
+  // The quicker ways to reach a deletion. Nothing here clicks a note row: a pointer click on the list stalls the way
+  // the editor's own buttons do, and the shortcuts and the menu are what a person would use anyway.
+  await openPanel(page, "Notes");
+  await page.waitForTimeout(1200);
+  const beforeShortcut = await listCount();
+
+  await page.locator(".note-list button").first().click();
+  await page.waitForTimeout(1500);
+  await page.keyboard.press("Control+Shift+Backspace");
+  await page.waitForTimeout(2500);
+  const afterShortcut = await listCount();
+  check(
+    "the keyboard can move the open note to the recycle bin (§19)",
+    afterShortcut === beforeShortcut - 1,
+    `${beforeShortcut} -> ${afterShortcut}`,
+  );
+
+  const undoOffered = await page.evaluate(() =>
+    [...document.querySelectorAll(".toast button")].some((button) =>
+      /undo/i.test(button.textContent ?? ""),
+    ),
+  );
+  check("and the message offers to undo it (§19)", undoOffered);
+  // Dispatched rather than clicked, for the reason above: the assertion is that undo works, not that Playwright can
+  // reach a button.
+  await page.evaluate(() => {
+    const button = [...document.querySelectorAll(".toast button")].find((candidate) =>
+      /undo/i.test(candidate.textContent ?? ""),
+    );
+    button?.click();
+  });
+  await page.waitForTimeout(2500);
+  const afterUndo = await listCount();
+  check(
+    "undo puts the note back (§19)",
+    afterUndo === beforeShortcut,
+    `${afterShortcut} -> ${afterUndo}`,
+  );
+
+  await page.evaluate(() => {
+    const row = document.querySelector(".note-list li");
+    row?.dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, clientX: 300, clientY: 300 }),
+    );
+  });
+  await page.waitForTimeout(700);
+  const menuItems = await page.locator(".context-menu [role=menuitem]").allTextContents();
+  check(
+    "right-clicking a note offers the same actions (§22)",
+    menuItems.some((label) => /recycle bin/i.test(label)),
+    JSON.stringify(menuItems),
+  );
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(500);
+  check("and the menu closes on Escape (§22)", (await page.locator(".context-menu").count()) === 0);
 
   // 10c. A phone (§22): one column, a rail that is still there, and a panel that covers the list rather than leaving
   // 260px of it. The rail matters most — hiding it, as the layout used to, left no way to reach folders, tags or sync

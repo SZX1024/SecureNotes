@@ -160,6 +160,32 @@ export async function deleteLocalNote(
 }
 
 /**
+ * Takes a note back out of the recycle bin, locally (§19).
+ *
+ * The undo of `deleteLocalNote`, and the same operation the sync flow needs when it is asked to restore a note the
+ * server has never heard of: the deletion is cleared and the queued change that carries it is dropped. Leaving that
+ * entry in the queue would remove the note again the moment the connection came back.
+ */
+export async function undoDeleteLocalNote(
+  context: LocalContext,
+  id: string,
+  nowMs?: number,
+): Promise<void> {
+  const existing = await context.db.notes.get(id);
+  if (!existing) {
+    throw new Error(`note ${id} is not in the local database`);
+  }
+
+  const now = nowMs ?? Date.now();
+  await context.db.transaction("rw", context.db.notes, context.db.syncQueue, async () => {
+    await context.db.notes.put({ ...existing, deletedAt: null, updatedAt: now });
+    const pending = await context.db.syncQueue.where("objectId").equals(id).toArray();
+    const stale = pending.filter((entry) => entry.operation === "delete");
+    await context.db.syncQueue.bulkDelete(stale.map((entry) => entry.id));
+  });
+}
+
+/**
  * Changes a note's organisation without touching its text: its folder, its pin, its manual order.
  *
  * The payload is **re-encrypted** even though the text is unchanged. The revision is part of the

@@ -1438,3 +1438,43 @@ button.status-item:hover:not(:disabled) {
   background: transparent;
   border: 0;
 }
+
+/* A row's own delete control, and the menu a right-click opens (§22). */
+.note-list li {
+  position: relative;
+}
+
+.context-menu {
+  position: fixed;
+  z-index: 60;
+  display: grid;
+  min-width: 12rem;
+  padding: var(--space-2);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-popover);
+}
+
+.context-menu .menu-item {
+  display: flex;
+  width: 100%;
+  min-height: var(--row-height);
+  padding: 0 var(--space-3);
+  font-size: var(--text-ui);
+  color: var(--text);
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  justify-content: start;
+}
+
+.context-menu .menu-item:hover:not(:disabled) {
+  background: var(--bg-selected);
+  border-color: transparent;
+}
+
+.context-menu .menu-item.danger:hover:not(:disabled) {
+  color: var(--danger);
+}

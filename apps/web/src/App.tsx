@@ -24,6 +24,7 @@ import {
 import {
   createLocalNote,
   deleteLocalNote,
+  undoDeleteLocalNote,
   readAllLocalNotes,
   updateLocalNote,
   type LocalContext,
@@ -64,6 +65,7 @@ import { MenuBar, type MenuDefinition } from "./ui/MenuBar";
 import { SettingsDialog } from "./ui/SettingsDialog";
 import { StatusBar } from "./ui/StatusBar";
 import { Tabs, type TabView } from "./ui/Tabs";
+import { ContextMenu, type ContextMenuState } from "./ui/ContextMenu";
 import {
   TOAST_DURATION_MS,
   autoDismisses,
@@ -241,6 +243,8 @@ export function App() {
     ),
   );
   const [toast, setToast] = useState<Toast | null>(null);
+  /** The open right-click menu, if any. One at a time, owned by whatever opened it. */
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   /** True while the pointer is over the message, which stops the clock rather than taking it away mid-sentence. */
   const [toastPaused, setToastPaused] = useState(false);
   /**
@@ -250,6 +254,14 @@ export function App() {
   const setMessage = useCallback((text: string | null, kind: ToastKind = "success") => {
     setToast(text === null ? null : { kind, message: text });
   }, []);
+
+  /** A message with one thing to do about it, such as undoing what just happened. */
+  const setMessageWithAction = useCallback(
+    (text: string, action: { label: string; run: () => void }, kind: ToastKind = "success") => {
+      setToast({ kind, message: text, action });
+    },
+    [],
+  );
 
   // Held as state rather than refs: the render path reads both, and reading a ref
   // during render is exactly what React forbids. `useState` with a lazy initialiser
@@ -416,7 +428,7 @@ export function App() {
   const handleRevocation = useCallback(async () => {
     await lockAndForget("signed-out");
     setMessage("Your session was revoked on another device. Sign in again.", "error");
-  }, [lockAndForget]);
+  }, [lockAndForget, setMessage]);
 
   /** Runs one sync pass and updates what the interface shows (§17). */
   const runSyncPass = useCallback(async () => {
@@ -501,7 +513,7 @@ export function App() {
         return null;
       }
     },
-    [handleRevocation],
+    [handleRevocation, setMessage],
   );
 
   // Boot: open the local database, ask whether the account exists, and decide
@@ -587,7 +599,7 @@ export function App() {
       }
     }, 30_000);
     return () => clearInterval(timer);
-  }, [screen, lockAndForget, keyStore]);
+  }, [screen, lockAndForget, keyStore, setMessage]);
 
   /**
    * Opens a note from a given list.
@@ -666,7 +678,7 @@ export function App() {
     } finally {
       setExporting(false);
     }
-  }, [db, account]);
+  }, [db, account, setMessage]);
 
   /**
    * Writes the account recovery package (§20).
@@ -702,7 +714,7 @@ export function App() {
     } finally {
       setExporting(false);
     }
-  }, []);
+  }, [setMessage]);
 
   /**
    * Reads an archive and, if ids collide, asks what to do with them (§20).
@@ -736,7 +748,7 @@ export function App() {
         );
       }
     },
-    [db],
+    [db, setMessage],
   );
 
   /** Applies the archive with the choice the user made. */
@@ -799,7 +811,7 @@ export function App() {
         setImporting(false);
       }
     },
-    [db, account, importPrompt, refresh],
+    [db, account, importPrompt, refresh, setMessage],
   );
 
   /** The CRUD behind the folder tree and the tag list (§9, §10). */
@@ -887,7 +899,7 @@ export function App() {
         await after(local);
       },
     };
-  }, [db, account, loadOrganisation]);
+  }, [db, account, loadOrganisation, setMessage]);
 
   const openNoteFrom = useCallback(
     (entries: StoredNote[], id: string) => {
@@ -941,7 +953,7 @@ export function App() {
       await refresh(db, account);
       setMessage("Saved locally and queued for sync.");
     });
-  }, [db, account, draft, refresh, runRequest, openedRefs]);
+  }, [db, account, draft, refresh, runRequest, openedRefs, setMessage]);
 
   const createNote = useCallback(async () => {
     if (!db || !account) {
@@ -1041,25 +1053,53 @@ export function App() {
     [draft, leaveCurrentTab, openNote, openTabs],
   );
 
+  /**
+   * Moves a note to the recycle bin (§19), with an undo.
+   *
+   * The deletion is reversible in the recycle bin already, so the undo is not about safety — it is about not having to
+   * go somewhere else to correct a mis-click. It restores the note where it was and drops the queued deletion with it,
+   * because that entry would otherwise remove the note again as soon as the connection returned.
+   */
+  const deleteNote = useCallback(
+    async (id: string) => {
+      if (db === null || account === null) {
+        return;
+      }
+      const context: LocalContext = {
+        db,
+        dek: account.dek,
+        userId: account.userId,
+        keyVersion: account.keyVersion,
+      };
+      await runRequest(async () => {
+        await deleteLocalNote(context, id);
+        setOpenTabs((current) => removeTab(current, id));
+        if (draft !== null && draft.id === id) {
+          setDraft(null);
+        }
+        await refresh(db, account);
+        setMessageWithAction("Moved to the recycle bin.", {
+          label: "Undo",
+          run: () => {
+            void (async () => {
+              await undoDeleteLocalNote(context, id);
+              await refresh(db, account);
+              setMessage("Put back.");
+            })();
+          },
+        });
+        scheduler.current?.scheduleAfterIdle();
+      });
+    },
+    [db, account, draft, refresh, runRequest, setMessageWithAction, setMessage],
+  );
+
   /** Moves the open note to the recycle bin (§19). */
-  const deleteCurrentNote = useCallback(async () => {
-    if (draft === null || db === null || account === null) {
-      return;
+  const deleteCurrentNote = useCallback(() => {
+    if (draft !== null) {
+      void deleteNote(draft.id);
     }
-    const context: LocalContext = {
-      db,
-      dek: account.dek,
-      userId: account.userId,
-      keyVersion: account.keyVersion,
-    };
-    await runRequest(async () => {
-      await deleteLocalNote(context, draft.id);
-      await refresh(db, account);
-      setOpenTabs((current) => removeTab(current, draft.id));
-      setDraft(null);
-      scheduler.current?.scheduleAfterIdle();
-    });
-  }, [db, account, draft, refresh, runRequest]);
+  }, [draft, deleteNote]);
 
   /**
    * Brings a note back out of the recycle bin (§19).
@@ -1261,7 +1301,7 @@ export function App() {
         }
       }
     },
-    [account, db, draft, handleRevocation],
+    [account, db, draft, handleRevocation, setMessage],
   );
 
   /**
@@ -1289,7 +1329,7 @@ export function App() {
         );
       }
     },
-    [insertIntoDraft],
+    [insertIntoDraft, setMessage],
   );
 
   /** Applies the paste rules (§12). */
@@ -1319,7 +1359,7 @@ export function App() {
         setMessage(decision.reason, "error");
       }
     },
-    [insertIntoDraft, richTextPreference, uploadImages, applyRichText],
+    [insertIntoDraft, richTextPreference, uploadImages, applyRichText, setMessage],
   );
 
   /** Applies the drop rules (§12: images only, with a size limit). */
@@ -1337,7 +1377,7 @@ export function App() {
       }
       void uploadImages(decision.files);
     },
-    [uploadImages],
+    [uploadImages, setMessage],
   );
 
   /**
@@ -1538,6 +1578,10 @@ export function App() {
 
   const commands = useMemo<Command[]>(
     () =>
+      // The compiler's rule follows these actions far enough to reach the scheduler ref that deleting a note
+      // touches, and cannot see that the whole path is asynchronous: a command runs when the palette is used, never
+      // while the interface is being built. Narrow on purpose — the rest of the component is still checked.
+      // eslint-disable-next-line react-hooks/refs
       buildCommands({
         newNote: () => void createNote(),
         search: () => setPaletteOpen(false),
@@ -1549,8 +1593,9 @@ export function App() {
             () => void lockAndForget("signed-out"),
           ),
         sortBy: (key) => setSortKey(key as SortKey),
+        deleteNote: () => deleteCurrentNote(),
       }),
-    [createNote, lockAndForget, runRequest],
+    [createNote, lockAndForget, runRequest, deleteCurrentNote],
   );
 
   // Global shortcuts (§23). The handler ignores unmodified keys typed into a
@@ -1587,6 +1632,7 @@ export function App() {
       if (id === "save-note") void saveDraft();
       if (id === "toggle-sidebar") setSidebarVisible((visible) => !visible);
       if (id === "show-recycle-bin") setScreen("recycle-bin");
+      if (id === "delete-note") void deleteCurrentNote();
       if (id === "search" || id === "command-palette") {
         setPaletteQuery("");
         setPaletteOpen(true);
@@ -1595,7 +1641,7 @@ export function App() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [screen, createNote, saveDraft]);
+  }, [screen, createNote, saveDraft, deleteCurrentNote]);
 
   const searchHits = useMemo(() => {
     if (query.trim().length === 0) {
@@ -1937,7 +1983,26 @@ export function App() {
           </header>
           <ul className="note-list">
             {visibleNotes.map((note) => (
-              <li key={note.id} className={note.id === selectedId ? "selected" : ""}>
+              <li
+                key={note.id}
+                className={note.id === selectedId ? "selected" : ""}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  setContextMenu({
+                    x: event.clientX,
+                    y: event.clientY,
+                    items: [
+                      { id: "open", label: "Open", onSelect: () => openNote(note.id) },
+                      {
+                        id: "delete",
+                        label: "Move to the recycle bin",
+                        danger: true,
+                        onSelect: () => void deleteNote(note.id),
+                      },
+                    ],
+                  });
+                }}
+              >
                 <button type="button" onClick={() => openNote(note.id)}>
                   <span className="row-head">
                     <span className="title">{renderHighlighted(note.title, query)}</span>
@@ -1967,6 +2032,22 @@ export function App() {
             onSelect={selectTab}
             onClose={closeTab}
             onNew={() => void createNote()}
+            onContextMenu={(tab, at) =>
+              setContextMenu({
+                x: at.x,
+                y: at.y,
+                items: [
+                  { id: "open", label: "Open", onSelect: () => openNote(tab.id) },
+                  { id: "close", label: "Close", onSelect: () => closeTab(tab.id) },
+                  {
+                    id: "delete",
+                    label: "Move to the recycle bin",
+                    danger: true,
+                    onSelect: () => void deleteNote(tab.id),
+                  },
+                ],
+              })
+            }
           />
           {draft ? (
             <>
@@ -2126,6 +2207,8 @@ export function App() {
             <p className="muted">Select a note, or create one.</p>
           )}
         </section>
+
+        {contextMenu && <ContextMenu menu={contextMenu} onClose={() => setContextMenu(null)} />}
 
         {toast && (
           <div

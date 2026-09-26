@@ -187,6 +187,7 @@ describe("command palette (§10)", () => {
     lock: vi.fn(),
     signOut: vi.fn(),
     sortBy: vi.fn(),
+    deleteNote: vi.fn(),
   };
 
   it("filters by label and keywords, and returns everything for an empty query", () => {

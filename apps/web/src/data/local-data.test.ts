@@ -13,6 +13,7 @@ import {
   createLocalFolder,
   deleteLocalFolder,
   deleteLocalNote,
+  undoDeleteLocalNote,
   deleteLocalTag,
   readLocalNoteTags,
   renameLocalTag,
@@ -605,6 +606,31 @@ describe("moving a note to the recycle bin (§19)", () => {
       // in order, so the server sees the note before it sees it disappear.
       const queued = await pendingChangesFor(context.db, "note-doomed");
       expect(queued.map((entry) => entry.operation)).toEqual(["create", "delete"]);
+    } finally {
+      await context.close();
+    }
+  });
+});
+
+describe("undoing a deletion (§19)", () => {
+  it("clears the mark and drops the queued deletion with it", async () => {
+    const context = await freshContext();
+    try {
+      const note = await createLocalNote(context, { id: "note-undo", title: "Back", body: "" });
+      await deleteLocalNote(context, note.id, 4242);
+      expect(
+        (await pendingChangesFor(context.db, note.id)).map((entry) => entry.operation),
+      ).toEqual(["create", "delete"]);
+
+      await undoDeleteLocalNote(context, note.id, 5000);
+
+      const stored = await context.db.notes.get(note.id);
+      expect(stored?.deletedAt).toBeNull();
+      // The queued deletion goes too: leaving it would take the note away again the moment the connection returned,
+      // which is a deletion that happens minutes after it was undone.
+      expect(
+        (await pendingChangesFor(context.db, note.id)).map((entry) => entry.operation),
+      ).toEqual(["create"]);
     } finally {
       await context.close();
     }

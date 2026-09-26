@@ -25,6 +25,16 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: "save-note", key: "s", ctrlOrMeta: true, description: "Save the current note" },
   { id: "toggle-sidebar", key: "b", ctrlOrMeta: true, description: "Toggle the folder pane" },
   { id: "show-recycle-bin", key: "r", ctrlOrMeta: true, shift: true, description: "Recycle bin" },
+  // Ctrl+Shift+Backspace rather than Delete on its own: a bare Delete fires wherever the focus happens to be, and
+  // a note disappearing because someone pressed a key while looking at something else is not a shortcut. Not
+  // Ctrl+Shift+Delete either — that is the browser's own "clear browsing data", so the page never sees the key.
+  {
+    id: "delete-note",
+    key: "Backspace",
+    ctrlOrMeta: true,
+    shift: true,
+    description: "Move the note to the recycle bin",
+  },
   { id: "escape", key: "Escape", description: "Close the palette or search" },
 ];
 
@@ -117,10 +127,17 @@ export function buildCommands(actions: {
   lock: () => void;
   signOut: () => void;
   sortBy: (key: string) => void;
+  deleteNote: () => void;
 }): Command[] {
   return [
     { id: "new-note", label: "New note", keywords: "create write", run: actions.newNote },
     { id: "search", label: "Search notes", keywords: "find filter", run: actions.search },
+    {
+      id: "delete-note",
+      label: "Move this note to the recycle bin",
+      keywords: "delete remove trash discard",
+      run: actions.deleteNote,
+    },
     {
       id: "toggle-sidebar",
       label: "Toggle folder pane",

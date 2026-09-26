@@ -24,9 +24,11 @@ export interface TabsProps {
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
   onNew: () => void;
+  /** Opening the same menu a note row offers, so a tab can be closed or discarded from where it is. */
+  onContextMenu?: (tab: TabView, at: { x: number; y: number }) => void;
 }
 
-export function Tabs({ tabs, activeId, onSelect, onClose, onNew }: TabsProps) {
+export function Tabs({ tabs, activeId, onSelect, onClose, onNew, onContextMenu }: TabsProps) {
   if (tabs.length === 0) {
     return null;
   }
@@ -37,7 +39,16 @@ export function Tabs({ tabs, activeId, onSelect, onClose, onNew }: TabsProps) {
         const label = tab.title.trim().length > 0 ? tab.title : "Untitled";
         const active = tab.id === activeId;
         return (
-          <div key={tab.id} className={active ? "tab active" : "tab"}>
+          <div
+            key={tab.id}
+            className={active ? "tab active" : "tab"}
+            onContextMenu={(event) => {
+              if (onContextMenu) {
+                event.preventDefault();
+                onContextMenu(tab, { x: event.clientX, y: event.clientY });
+              }
+            }}
+          >
             <button
               type="button"
               role="tab"
