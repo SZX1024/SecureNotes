@@ -12,6 +12,7 @@
     "dev:worker": "pnpm --filter @securenotes/worker dev",
     "dev:web": "pnpm --filter @securenotes/web dev",
     "build": "pnpm --filter @securenotes/web build",
+    "deploy:prod": "pnpm build && pnpm --filter @securenotes/worker exec wrangler d1 migrations apply securenotes-db --remote --env production && pnpm --filter @securenotes/worker exec wrangler deploy --env production",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "lint": "eslint .",

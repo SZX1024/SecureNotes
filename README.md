@@ -153,20 +153,23 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64'))" \
 node -e "console.log(require('crypto').randomBytes(32).toString('base64'))" \
   | pnpm --filter @securenotes/worker exec wrangler secret put CSRF_SIGNING_KEY
 
-# 3. The schema, then the deployment — which also uploads the built client.
+# 3. The deployment: build the client, apply migrations, deploy the production environment.
 #
-#    `wrangler.toml` stays a development configuration: the same file runs the local stack, where the origins are
-#    localhost and diagnostics are exposed. The two values a deployment needs are passed here instead, and
-#    ENVIRONMENT=production also turns on the stricter security headers.
-#
-#    ALLOWED_ORIGINS is a security control, not a convenience: the worker checks the browser's Origin against it, so a
+#    The values a deployment needs live in `[env.production]` in apps/worker/wrangler.toml, so there is nothing to
+#    remember on the command line. Edit the deployed origin there — it is the only one allowed to call the API, and a
 #    wrong value makes the deployed app refuse its own requests.
-pnpm build
-pnpm --filter @securenotes/worker exec wrangler d1 migrations apply securenotes-db --remote
-pnpm --filter @securenotes/worker exec wrangler deploy \
-  --var "ALLOWED_ORIGINS:https://securenotes.<your-subdomain>.workers.dev" \
-  --var "ENVIRONMENT:production"
+pnpm deploy:prod
 ```
+
+`wrangler.toml` holds two environments: the top-level values are the **development** ones that `wrangler dev` uses, and
+`[env.production]` holds the deployed ones. `pnpm deploy:prod` is `wrangler deploy --env production` with the build and
+the migrations in front of it. Two things about that split are worth knowing:
+
+- **A bare `wrangler deploy` deploys the development configuration.** It is a valid command that publishes localhost as
+  the allowed origin and turns diagnostics back on. `pnpm deploy:prod` exists so that the deployed path is the easy one.
+- **The bindings are written twice.** Wrangler does not inherit `d1_databases` or `r2_buckets` into an environment, so
+  the database id and the bucket name appear in both sections and the two must agree. `wrangler deploy --env production
+--dry-run` warns when they do not — run it after editing either one.
 
 `wrangler deploy` prints the deployed URL. Open it, enrol, and install it: the manifest and the service worker make it
 a PWA that works offline.
@@ -191,14 +194,13 @@ pnpm --filter @securenotes/worker exec wrangler deploy --dry-run
 Two ways to bind the repository to Cloudflare. The first is scripted here and needs no dashboard work.
 
 **GitHub Actions (this repository ships the workflow).** `.github/workflows/deploy.yml` runs on every push to `main`:
-it runs the full gate, applies migrations, builds the client and deploys. Add two repository secrets and, once, one
-variable:
+it runs the full gate and then `pnpm deploy:prod`, which builds the client, applies migrations and deploys the
+production environment. Add two repository secrets:
 
-| Kind     | Name                    | Value                                                                   |
-| -------- | ----------------------- | ----------------------------------------------------------------------- |
-| Secret   | `CLOUDFLARE_API_TOKEN`  | API token from the Cloudflare dashboard ("Edit Cloudflare Workers")     |
-| Secret   | `CLOUDFLARE_ACCOUNT_ID` | Your account id                                                         |
-| Variable | `ALLOWED_ORIGINS`       | The deployed origin, e.g. `https://securenotes.<subdomain>.workers.dev` |
+| Kind   | Name                    | Value                                                               |
+| ------ | ----------------------- | ------------------------------------------------------------------- |
+| Secret | `CLOUDFLARE_API_TOKEN`  | API token from the Cloudflare dashboard ("Edit Cloudflare Workers") |
+| Secret | `CLOUDFLARE_ACCOUNT_ID` | Your account id                                                     |
 
 Without the two secrets the workflow still runs the gate and says so, rather than failing: a fork or a fresh clone
 stays green.

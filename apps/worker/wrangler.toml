@@ -12,12 +12,16 @@ workers_dev = true
 [dev]
 port = 8787
 
+# These are the *development* values, and they are the ones `wrangler dev` uses.
+# Deployment does not read them: `wrangler deploy --env production` takes
+# everything from `[env.production]` below. Keeping the two apart is what stops a
+# deploy from silently publishing localhost as the deployed origin — and stops the
+# local stack from being configured for production.
 [vars]
 ENVIRONMENT = "development"
 # Origins allowed to call the API. The browser talks to its own origin and Vite
 # proxies /api to this worker, so in development the Vite origins must be listed
 # explicitly: the worker sees the browser's Origin, not its own.
-# Production must list only the deployed origin, e.g. "https://notes.example.com".
 ALLOWED_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173"
 
 # Local development uses Miniflare's local D1/R2 emulation (.wrangler/state) and
@@ -49,3 +53,39 @@ crons = ["17 * * * *"]
 
 [observability]
 enabled = true
+
+# ---------------------------------------------------------------------------------------------------------------
+# The deployed environment.
+#
+# `wrangler deploy --env production` (or `pnpm deploy`) uses this section and nothing above changes: the same worker
+# name, the same database and bucket bindings, the same assets and the same cron trigger. `name` has to be repeated
+# here on purpose — wrangler derives `securenotes-production` for an environment that does not state one, which would
+# deploy a second worker under a second URL and leave the real one serving the previous version.
+#
+# The bindings are inherited; the variables are not, so every variable the deployment needs is written out here.
+# ---------------------------------------------------------------------------------------------------------------
+[env.production]
+name = "securenotes"
+workers_dev = true
+
+[env.production.vars]
+ENVIRONMENT = "production"
+# The deployed origin, and the only one allowed to call the API. This is a security control rather than a convenience:
+# it is what stops another site from driving the API with this browser's cookies.
+ALLOWED_ORIGINS = "https://securenotes.szx10246.workers.dev"
+
+# The bindings are repeated deliberately: wrangler does not inherit `d1_databases` or `r2_buckets` into an environment,
+# and a deployment without them is a worker with no database — it would answer every request with a configuration error
+# while the account and the notes sat untouched in D1. `wrangler deploy --env production --dry-run` warns about exactly
+# this, so the mismatch is caught before a deployment rather than after one.
+#
+# The cost is that the database id is written twice and the two must agree.
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "securenotes-db"
+database_id = "72771b35-93b8-41c8-be3a-776a7a631418"
+migrations_dir = "migrations"
+
+[[env.production.r2_buckets]]
+binding = "ATTACHMENTS"
+bucket_name = "securenotes-attachments"
