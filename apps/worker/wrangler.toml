@@ -70,9 +70,13 @@ workers_dev = true
 
 [env.production.vars]
 ENVIRONMENT = "production"
-# The deployed origin, and the only one allowed to call the API. This is a security control rather than a convenience:
-# it is what stops another site from driving the API with this browser's cookies.
-ALLOWED_ORIGINS = "https://securenotes.szx10246.workers.dev"
+# Every origin the application is served from, and the only ones allowed to call the API. This is a security control
+# rather than a convenience: it is what stops another site from driving the API with this browser's cookies. Adding a
+# domain here is part of moving to it — a domain that is missing answers every request with 403 ORIGIN_REJECTED, which
+# looks like a broken sign-in rather than a wrong setting.
+#
+# The workers.dev origin is kept alongside the custom domain so both keep working; drop it to leave exactly one.
+ALLOWED_ORIGINS = "https://notes.szx10246.xyz,https://securenotes.szx10246.workers.dev"
 
 # The bindings are repeated deliberately: wrangler does not inherit `d1_databases` or `r2_buckets` into an environment,
 # and a deployment without them is a worker with no database — it would answer every request with a configuration error
