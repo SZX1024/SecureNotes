@@ -309,6 +309,8 @@ export interface NoteOrganisationProps {
   maxTags: number;
   onFolderChange: (folderId: string | null) => void;
   onTagsChange: (tagIds: string[]) => void;
+  /** Creates a tag and applies it to this note; absent when the editor cannot write tags. */
+  onCreateTag?: (name: string) => void;
 }
 
 /** Where the open note lives, and which tags it carries. */
@@ -320,16 +322,31 @@ export function NoteOrganisation({
   maxTags,
   onFolderChange,
   onTagsChange,
+  onCreateTag,
 }: NoteOrganisationProps) {
+  const [adding, setAdding] = useState(false);
+  const [draftName, setDraftName] = useState("");
+
   const toggle = (tagId: string) => {
     const next = tagIds.includes(tagId) ? tagIds.filter((id) => id !== tagId) : [...tagIds, tagId];
     onTagsChange(next);
   };
 
+  const submitNewTag = () => {
+    const name = draftName.trim();
+    setAdding(false);
+    setDraftName("");
+    if (name.length > 0) {
+      onCreateTag?.(name);
+    }
+  };
+
   return (
-    <section className="note-organisation" aria-label="Note organisation">
-      <label className="field">
-        <span>Folder</span>
+    <section className="metadata-bar" aria-label="Note organisation">
+      {/* The folder is one chip, and the control is still a select: choosing one of a list is what a select is for,
+          and the label it carries is what a screen reader and the tests both use. */}
+      <label className="chip chip-field" title="Folder">
+        <Icon name="folder" size={12} />
         <select
           aria-label="Note folder"
           value={folderId ?? ""}
@@ -337,34 +354,75 @@ export function NoteOrganisation({
             onFolderChange(event.target.value === "" ? null : event.target.value)
           }
         >
-          <option value="">(no folder)</option>
+          <option value="">No folder</option>
           {folders.map((folder) => (
             <option key={folder.id} value={folder.id}>
               {folder.name}
             </option>
           ))}
         </select>
+        <Icon name="collapse" size={12} />
       </label>
 
-      <fieldset>
-        <legend>
-          Tags ({tagIds.length}/{maxTags})
-        </legend>
-        {tags.length === 0 && <p className="muted">No tags yet.</p>}
-        {tags.map((tag) => (
-          <label key={tag.id} className="checkbox chip-toggle">
+      <div className="chip-row" role="group" aria-label={`Tags (${tagIds.length}/${maxTags})`}>
+        {tags.map((tag) => {
+          const selected = tagIds.includes(tag.id);
+          return (
+            <label
+              key={tag.id}
+              className={selected ? "chip chip-toggle selected" : "chip chip-toggle"}
+            >
+              <input
+                type="checkbox"
+                checked={selected}
+                // The cap is enforced by disabling what cannot be added, rather than accepting the click and dropping
+                // it silently.
+                disabled={!selected && tagIds.length >= maxTags}
+                onChange={() => toggle(tag.id)}
+              />
+              <span>{tag.name}</span>
+            </label>
+          );
+        })}
+
+        {tags.length === 0 && !adding && <span className="muted">No tags yet</span>}
+
+        {adding ? (
+          <form
+            className="chip chip-input"
+            onSubmit={(event) => {
+              event.preventDefault();
+              submitNewTag();
+            }}
+          >
             <input
-              type="checkbox"
-              checked={tagIds.includes(tag.id)}
-              // The cap is enforced by disabling what cannot be added, rather than accepting the click and
-              // dropping it silently.
-              disabled={!tagIds.includes(tag.id) && tagIds.length >= maxTags}
-              onChange={() => toggle(tag.id)}
+              aria-label="New tag for this note"
+              value={draftName}
+              autoFocus
+              placeholder="Tag name"
+              onChange={(event) => setDraftName(event.target.value)}
+              onBlur={submitNewTag}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  setAdding(false);
+                  setDraftName("");
+                }
+              }}
             />
-            <span>{tag.name}</span>
-          </label>
-        ))}
-      </fieldset>
+          </form>
+        ) : (
+          <button
+            type="button"
+            className="chip chip-add"
+            aria-label="Add a tag to this note"
+            title="Add a tag"
+            onClick={() => setAdding(true)}
+          >
+            <Icon name="add" size={12} />
+            Tag
+          </button>
+        )}
+      </div>
     </section>
   );
 }

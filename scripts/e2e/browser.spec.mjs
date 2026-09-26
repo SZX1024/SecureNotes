@@ -737,6 +737,24 @@ try {
   await page.getByRole("checkbox", { name: "urgent" }).check();
   await page.waitForTimeout(2000);
 
+  // The metadata bar's own entry: a tag created and applied without leaving the note.
+  await page.getByRole("button", { name: "Add a tag to this note" }).click();
+  await page.waitForTimeout(400);
+  await page.getByLabel("New tag for this note").fill("fromthebar");
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(3000);
+  const barTag = await page.evaluate(() => {
+    const chip = [...document.querySelectorAll(".metadata-bar .chip-toggle")].find((node) =>
+      (node.textContent ?? "").includes("fromthebar"),
+    );
+    return { found: Boolean(chip), applied: chip?.querySelector("input")?.checked ?? false };
+  });
+  check(
+    "a tag can be created and applied from the note itself (§9)",
+    barTag.found && barTag.applied,
+    JSON.stringify(barTag),
+  );
+
   await page.evaluate(() => {
     const button = [...document.querySelectorAll(".tags-pane button")].find(
       (candidate) => candidate.textContent?.trim() === "urgent",

@@ -837,13 +837,17 @@ export function App() {
         setSelectedFolderId((current) => (current === id ? null : current));
         await after(local);
       },
-      createTag: async (name: string) => {
+      createTag: async (name: string): Promise<string | null> => {
         const local = context();
         if (!local) {
-          return;
+          return null;
         }
-        await createLocalTag(local, { id: crypto.randomUUID(), name });
+        const id = crypto.randomUUID();
+        await createLocalTag(local, { id, name });
         await after(local);
+        // The id comes back so the caller can apply the tag it just made: creating one and then asking the user to
+        // find and click it is a step that exists for the program's convenience rather than theirs.
+        return id;
       },
       renameTag: async (id: string, name: string) => {
         const local = context();
@@ -2007,6 +2011,15 @@ export function App() {
                       scheduler.current?.scheduleAfterIdle();
                     },
                   );
+                }}
+                onCreateTag={(name) => {
+                  void organisationActions.createTag(name).then((id) => {
+                    if (id !== null) {
+                      setNoteTagIds((current) =>
+                        current.includes(id) ? current : [...current, id],
+                      );
+                    }
+                  });
                 }}
               />
 
