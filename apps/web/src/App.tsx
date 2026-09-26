@@ -63,6 +63,8 @@ import { Icon } from "./ui/Icon";
 import { MenuBar, type MenuDefinition } from "./ui/MenuBar";
 import { SettingsDialog } from "./ui/SettingsDialog";
 import { StatusBar } from "./ui/StatusBar";
+import { Tabs, type TabView } from "./ui/Tabs";
+import { addTab, isDirty, loadTabs, neighbourAfterClose, removeTab, saveTabs } from "./ui/tabs";
 import { applyTypography, loadTypography, saveTypography, type Typography } from "./ui/typography";
 import { FolderTree, NoteOrganisation, TagList } from "./ui/Organisation";
 import { defaultEditorMode, loadEditorMode, saveEditorMode, type EditorMode } from "./editor/mode";
@@ -177,6 +179,8 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   /** The note whose permanent deletion is waiting for a second, explicit press. */
   const [confirmingPermanent, setConfirmingPermanent] = useState<string | null>(null);
+  /** The notes that are open, oldest first. Persisted, so reopening the app reopens what was being worked on. */
+  const [openTabs, setOpenTabs] = useState<string[]>([]);
   const [recycleBusy, setRecycleBusy] = useState(false);
   const [typography, setTypography] = useState<Typography>(() => loadTypography(localStorage));
   const [preview, setPreview] = useState(false);
@@ -867,6 +871,7 @@ export function App() {
         return;
       }
       setSelectedId(id);
+      setOpenTabs((current) => addTab(current, id));
       setDraft({ id, title: found.document.title, body: found.document.body });
       setOpenedRefs(attachmentRefsIn(found.document.body));
       setRecent((current) => rememberOpened(current, id));
@@ -932,6 +937,85 @@ export function App() {
     });
   }, [db, account, refresh, openNoteFrom, runRequest]);
 
+  /** What the strip shows: the open ids joined to the notes they refer to, and whether each has unsaved work. */
+  const tabs = useMemo<TabView[]>(
+    () =>
+      openTabs
+        .map((id) => {
+          const entry = notes.find((candidate) => candidate.note.id === id);
+          if (!entry) {
+            return null;
+          }
+          return {
+            id,
+            title: entry.document.title,
+            dirty: isDirty(draft !== null && draft.id === id ? draft : null, entry.document),
+          };
+        })
+        .filter((tab): tab is TabView => tab !== null),
+    [openTabs, notes, draft],
+  );
+
+  // Loaded once the notes are readable, so a stored list can be filtered to ids that actually exist.
+  const tabsRestored = useRef(false);
+  useEffect(() => {
+    if (tabsRestored.current || notes.length === 0) {
+      return;
+    }
+    tabsRestored.current = true;
+    const known = new Set(notes.map((entry) => entry.note.id));
+    setOpenTabs((current) =>
+      current.length > 0 ? current : loadTabs(localStorage, (id) => known.has(id)),
+    );
+  }, [notes]);
+
+  useEffect(() => {
+    saveTabs(localStorage, openTabs);
+  }, [openTabs]);
+
+  /** The draft is saved before the strip moves: switching tabs must not be a way to lose an edit. */
+  const leaveCurrentTab = useCallback(async () => {
+    if (draft === null) {
+      return;
+    }
+    const stored = notes.find((entry) => entry.note.id === draft.id)?.document ?? null;
+    if (isDirty(draft, stored)) {
+      await saveDraft();
+    }
+  }, [draft, notes, saveDraft]);
+
+  const selectTab = useCallback(
+    (id: string) => {
+      void (async () => {
+        await leaveCurrentTab();
+        openNote(id);
+      })();
+    },
+    [leaveCurrentTab, openNote],
+  );
+
+  const closeTab = useCallback(
+    (id: string) => {
+      void (async () => {
+        if (draft !== null && draft.id === id) {
+          await leaveCurrentTab();
+        }
+        const next = neighbourAfterClose(openTabs, id);
+        setOpenTabs((current) => removeTab(current, id));
+        if (draft !== null && draft.id === id) {
+          // The note that takes its place, or an empty editor when it was the last one open.
+          if (next !== null) {
+            openNote(next);
+          } else {
+            setDraft(null);
+            setSelectedId(null);
+          }
+        }
+      })();
+    },
+    [draft, leaveCurrentTab, openNote, openTabs],
+  );
+
   /** Moves the open note to the recycle bin (§19). */
   const deleteCurrentNote = useCallback(async () => {
     if (draft === null || db === null || account === null) {
@@ -946,6 +1030,7 @@ export function App() {
     await runRequest(async () => {
       await deleteLocalNote(context, draft.id);
       await refresh(db, account);
+      setOpenTabs((current) => removeTab(current, draft.id));
       setDraft(null);
       scheduler.current?.scheduleAfterIdle();
     });
@@ -1015,6 +1100,7 @@ export function App() {
             const stale = pending.filter((entry) => entry.objectId === id);
             await db.syncQueue.bulkDelete(stale.map((entry) => entry.id));
           });
+          setOpenTabs((current) => removeTab(current, id));
           setConfirmingPermanent(null);
           await refresh(db, account);
         });
@@ -1819,6 +1905,13 @@ export function App() {
         </section>
 
         <section className="pane editor">
+          <Tabs
+            tabs={tabs}
+            activeId={draft?.id ?? null}
+            onSelect={selectTab}
+            onClose={closeTab}
+            onNew={() => void createNote()}
+          />
           {draft ? (
             <>
               <input

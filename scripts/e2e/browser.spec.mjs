@@ -1490,6 +1490,102 @@ print(json.dumps({
       console.log(`       ${message.slice(0, 120)}`);
     }
   }
+  // 11. Open notes (§22): a strip of tabs above the editor, and switching between them without losing an edit.
+  //
+  // The sections before this one end on the sign-in screen, so it starts by getting back into the app. The two notes
+  // are given names because the run's notes are otherwise all called "Untitled", and a tab strip whose labels are
+  // identical cannot be addressed — by a test or by a person.
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForTimeout(3000);
+  if (await page.$('input[aria-label="Authenticator code"]')) {
+    await page.fill('input[aria-label="Username"]', "e2e-account");
+    await page.fill('input[aria-label="Authenticator code"]', totpFromBase32(activeSecret));
+    await page.click('button[type="submit"]');
+  } else {
+    const unlock = page.getByRole("button", { name: /unlock/i }).first();
+    if (await unlock.count()) {
+      await unlock.click();
+    }
+  }
+  await page.waitForSelector('button:has-text("New note")', { timeout: 25_000 });
+  await page.waitForTimeout(2500);
+
+  const tabCount = () => page.getByRole("tab").count();
+  const titleValue = async () => (await page.getByLabel("Note title").inputValue()).trim();
+  const pressSave = () => clickEditorButton(page, /save/i);
+
+  await openPanel(page, "Notes");
+  await page.click(".note-list button");
+  await page.waitForTimeout(2500);
+  await page.getByLabel("Note title").fill("First tab note");
+  await pressSave();
+  await page.waitForTimeout(1500);
+  const tabsAfterFirst = await tabCount();
+  check(
+    "opening a note puts it in the strip (§22)",
+    tabsAfterFirst === 1,
+    `${tabsAfterFirst} tab(s)`,
+  );
+
+  await page.click(".note-list button >> nth=1");
+  await page.waitForTimeout(2500);
+  await page.getByLabel("Note title").fill("Second tab note");
+  await pressSave();
+  await page.waitForTimeout(1500);
+  const tabsAfterSecond = await tabCount();
+  check(
+    "opening a second note adds a tab rather than replacing the first (§22)",
+    tabsAfterSecond === 2 &&
+      (await page.getByRole("tab", { name: "First tab note" }).count()) === 1 &&
+      (await page.getByRole("tab", { name: "Second tab note" }).count()) === 1,
+    `${tabsAfterFirst} -> ${tabsAfterSecond}`,
+  );
+
+  // Unsaved work in the note being edited, then away and back: if switching tabs did not save, this is where it shows.
+  const marker = `kept across a switch ${Date.now()}`;
+  await page.click(".cm-content, .ProseMirror");
+  await page.waitForTimeout(400);
+  await page.keyboard.press("End");
+  await page.keyboard.insertText(`\n${marker}`);
+  await page.waitForTimeout(600);
+  check(
+    "a tab with unsaved work says so (§22)",
+    (await page.locator(".tab.active .tab-dirty").count()) === 1,
+  );
+
+  await page.getByRole("tab", { name: "First tab note" }).click();
+  await page.waitForTimeout(2500);
+  check(
+    "switching tabs opens that note (§22)",
+    (await titleValue()) === "First tab note",
+    await titleValue(),
+  );
+
+  await page.getByRole("tab", { name: "Second tab note" }).click();
+  await page.waitForTimeout(3000);
+  const body = await page.evaluate(
+    () => document.querySelector(".cm-content, .ProseMirror")?.textContent ?? "",
+  );
+  check(
+    "and the edit made before switching is still there (§22)",
+    body.includes(marker),
+    body.slice(-50).replace(/\n/g, " "),
+  );
+
+  await page.getByRole("button", { name: "Close Second tab note" }).click();
+  await page.waitForTimeout(2500);
+  const afterClose = await tabCount();
+  check(
+    "closing a tab leaves the others open (§22)",
+    afterClose === 1,
+    `${tabsAfterSecond} -> ${afterClose}`,
+  );
+  check(
+    "and shows a neighbour rather than an empty editor (§22)",
+    (await titleValue()) === "First tab note",
+    await titleValue(),
+  );
+
   // 9e. The recycle bin (§19): deleting is a move rather than a loss, and both endings are reachable.
   //
   // Rows are counted by their Restore button rather than by `li`: an empty bin renders one `<li>` of its own saying so,
