@@ -987,18 +987,35 @@ button.status-item:hover:not(:disabled) {
 }
 
 @media (max-width: 767px) {
-  /* A rail plus a drawer is more chrome than a phone has room for; the top bar's gear reaches settings. */
+  /* The rail stays on a phone. Hiding it was the earlier decision and it was wrong: the panel is opened from the rail
+     and nowhere else, so a phone could reach neither folders, nor tags, nor sync — the settings dialog was the only
+     door, and it does not open the panel. The rail costs 48px and buys all of it. */
   .app .shell,
   .app .shell.sidebar-hidden {
-    grid-template-columns: 1fr;
+    grid-template-columns: var(--rail-width) 1fr;
   }
 
-  .rail {
-    display: none;
+  /* The panel covers the list rather than sitting beside it: 260px of panel and a list on a 390px screen leaves
+     neither usable. */
+  .pane.side-panel {
+    position: fixed;
+    inset: var(--topbar-height) 0 var(--status-height) var(--rail-width);
+    z-index: 30;
+    border-right: 0;
+  }
+
+  /* Touch targets, per the platform minima. */
+  .rail button {
+    width: 44px;
+    height: 44px;
   }
 
   .status-bar {
     gap: var(--space-2);
+  }
+
+  .tab {
+    max-width: 11rem;
   }
 }
 

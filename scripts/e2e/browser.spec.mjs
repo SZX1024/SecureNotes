@@ -1678,6 +1678,40 @@ print(json.dumps({
     finalCount === notesBefore,
     `${afterRestore} -> ${finalCount}`,
   );
+
+  // 10c. A phone (§22): one column, a rail that is still there, and a panel that covers the list rather than leaving
+  // 260px of it. The rail matters most — hiding it, as the layout used to, left no way to reach folders, tags or sync
+  // on a phone at all.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForTimeout(1200);
+
+  const railButtons = await page.getByRole("button", { name: "Folders", exact: true }).count();
+  check("a phone still has the rail, so the panels are reachable (§22)", railButtons === 1);
+
+  await page.getByRole("button", { name: "Folders", exact: true }).click();
+  await page.waitForTimeout(1200);
+  const drawer = await page.evaluate(() => {
+    const panel = document.querySelector(".pane.side-panel");
+    if (!panel) {
+      return null;
+    }
+    const box = panel.getBoundingClientRect();
+    return {
+      width: Math.round(box.width),
+      left: Math.round(box.left),
+      inViewport:
+        box.left >= 0 && box.right <= window.innerWidth + 1 && box.bottom <= window.innerHeight + 1,
+      coversList: box.left >= 0 && box.width > window.innerWidth / 2,
+    };
+  });
+  check(
+    "and its panel opens over the list rather than squeezing it (§22)",
+    drawer !== null && drawer.inViewport && drawer.coversList,
+    JSON.stringify(drawer),
+  );
+
+  await page.setViewportSize({ width: 1440, height: 950 });
+  await page.waitForTimeout(1000);
 } catch (error) {
   failures.push(`  FAIL the run stopped early: ${String(error).slice(0, 300)}`);
   await page.screenshot({ path: `${SHOTS}/e2e-fatal.png` }).catch(() => undefined);
