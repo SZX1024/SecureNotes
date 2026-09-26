@@ -755,6 +755,31 @@ try {
     JSON.stringify(barTag),
   );
 
+  // Every row's content starts in the same place. A row whose text is short must not sit further right than one whose
+  // text is long, which is what happens when a row is a grid and something centres the column instead of the content in
+  // it — the bug this check was written for, and one that a screenshot showed and no assertion did.
+  const rowOffsets = await page.evaluate(() =>
+    [...document.querySelectorAll(".note-list li")].map((li) => {
+      const button = li.querySelector("button");
+      const head = li.querySelector(".row-head");
+      if (!button || !head) {
+        return null;
+      }
+      const padding = Number.parseFloat(getComputedStyle(button).paddingLeft);
+      return Math.round(
+        head.getBoundingClientRect().left - button.getBoundingClientRect().left - padding,
+      );
+    }),
+  );
+  check(
+    "a row's content sits against its own left edge (§22)",
+    // Measured against each row's own padding rather than against the other rows, so a list with one note in it still
+    // says something. A grid whose column is centred instead of stretched puts the content tens of pixels to the right,
+    // which no assertion was watching for until a screenshot showed it.
+    rowOffsets.length > 0 && rowOffsets.every((offset) => offset !== null && Math.abs(offset) <= 1),
+    JSON.stringify(rowOffsets),
+  );
+
   await page.evaluate(() => {
     const button = [...document.querySelectorAll(".tags-pane button")].find(
       (candidate) => candidate.textContent?.trim() === "urgent",

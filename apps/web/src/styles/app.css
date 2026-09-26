@@ -1227,11 +1227,17 @@ button.status-item:hover:not(:disabled) {
   border: 0;
 }
 
-/* Note rows (§22): the title identifies a note you had in mind, the opening words identify the one you had forgotten. */
+/* Note rows (§22): the title identifies a note you had in mind, the opening words identify the one you had forgotten.
+ *
+ * `justify-content` is set explicitly because the base `button` rule sets it to `center`. That is right for a button
+ * that lays its label out in a line, and wrong for one that lays a note out in a grid: in a grid it centres the whole
+ * column rather than the content in it, so the column shrinks to its content and a row with a short title appears
+ * indented while a row whose text fills the width looks correct. */
 .note-list button {
   display: grid;
   gap: var(--space-1);
   align-items: start;
+  justify-content: stretch;
 }
 
 .note-list .row-head {
