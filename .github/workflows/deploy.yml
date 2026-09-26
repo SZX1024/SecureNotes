@@ -71,9 +71,14 @@ jobs:
       - name: Deploy the worker and the client
         if: steps.credentials.outputs.available == 'true'
         run: |
+          # The values the deployment needs are passed here rather than kept in wrangler.toml, which stays a
+          # development configuration: the same file runs the local stack, where the origins are localhost and
+          # diagnostics are exposed. ENVIRONMENT=production also turns on the stricter security headers.
           if [ -n "${{ vars.ALLOWED_ORIGINS }}" ]; then
-            pnpm --filter @securenotes/worker exec wrangler deploy --var "ALLOWED_ORIGINS:${{ vars.ALLOWED_ORIGINS }}"
+            pnpm --filter @securenotes/worker exec wrangler deploy \
+              --var "ALLOWED_ORIGINS:${{ vars.ALLOWED_ORIGINS }}" \
+              --var "ENVIRONMENT:production"
           else
             echo "::warning::ALLOWED_ORIGINS is not set; deploying with the development origins, which the deployed app will reject."
-            pnpm --filter @securenotes/worker exec wrangler deploy
+            pnpm --filter @securenotes/worker exec wrangler deploy --var "ENVIRONMENT:production"
           fi

@@ -146,18 +146,26 @@ pnpm --filter @securenotes/worker exec wrangler d1 create securenotes-db
 pnpm --filter @securenotes/worker exec wrangler r2 bucket create securenotes-attachments
 #    ^ prints a database_id. Replace the placeholder in apps/worker/wrangler.toml with it.
 
-# 2. The two secrets. Use different values from your development ones.
-pnpm --filter @securenotes/worker exec wrangler secret put SECRET_WRAP_KEY
-pnpm --filter @securenotes/worker exec wrangler secret put CSRF_SIGNING_KEY
+# 2. The two secrets. The name is the argument; the value is read from the terminal, and piping it in avoids the
+#    interactive prompt entirely. These must be different values from your development ones.
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))" \
+  | pnpm --filter @securenotes/worker exec wrangler secret put SECRET_WRAP_KEY
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))" \
+  | pnpm --filter @securenotes/worker exec wrangler secret put CSRF_SIGNING_KEY
 
-# 3. Set the origin the deployed app will be served from. The worker checks the browser's Origin against this list, so
-#    a wrong value makes the app refuse its own requests.
-#    Edit ALLOWED_ORIGINS in apps/worker/wrangler.toml, e.g. "https://securenotes.<your-subdomain>.workers.dev".
-
-# 4. The schema, then the deployment (which also uploads the built client).
+# 3. The schema, then the deployment — which also uploads the built client.
+#
+#    `wrangler.toml` stays a development configuration: the same file runs the local stack, where the origins are
+#    localhost and diagnostics are exposed. The two values a deployment needs are passed here instead, and
+#    ENVIRONMENT=production also turns on the stricter security headers.
+#
+#    ALLOWED_ORIGINS is a security control, not a convenience: the worker checks the browser's Origin against it, so a
+#    wrong value makes the deployed app refuse its own requests.
 pnpm build
 pnpm --filter @securenotes/worker exec wrangler d1 migrations apply securenotes-db --remote
-pnpm --filter @securenotes/worker exec wrangler deploy
+pnpm --filter @securenotes/worker exec wrangler deploy \
+  --var "ALLOWED_ORIGINS:https://securenotes.<your-subdomain>.workers.dev" \
+  --var "ENVIRONMENT:production"
 ```
 
 `wrangler deploy` prints the deployed URL. Open it, enrol, and install it: the manifest and the service worker make it
@@ -168,7 +176,9 @@ Two things worth knowing before the first deploy:
 - **The asset directory must exist.** `pnpm build` must run before `wrangler deploy`; the worker configuration serves
   `apps/web/dist`, and an empty directory deploys a worker with no client.
 - **The origin must be right.** `ALLOWED_ORIGINS` is a security control, not a convenience: it is what stops another
-  site from driving the API with your cookies. Development values in production mean a deployed app that rejects itself.
+  site from driving the API with your cookies. Development values in production mean a deployed app that rejects itself,
+  and a secret entered under the wrong name means a worker that reports `SECRET_WRAP_KEY is not configured` on every
+  request — the name is the argument to `wrangler secret put`, and the value is what it then asks for.
 
 To check the configuration without deploying:
 

@@ -26,7 +26,7 @@ ALLOWED_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173"
 [[d1_databases]]
 binding = "DB"
 database_name = "securenotes-db"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "72771b35-93b8-41c8-be3a-776a7a631418"
 migrations_dir = "migrations"
 
 # The built client is served from the same origin as the API (§14: same-origin
