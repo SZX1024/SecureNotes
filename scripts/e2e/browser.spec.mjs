@@ -345,6 +345,21 @@ try {
   check("the visual editor opens a note with images", wysiwyg.present && !wysiwyg.failed);
   check("images survive the conversion", wysiwyg.images > 0, `${wysiwyg.images}`);
   check("formulas render in place", wysiwyg.katex > 0, `${wysiwyg.katex}`);
+
+  // The offsets that place a formula's parts. KaTeX sets them inline — a limit sits above an integral because of a
+  // `top` on a span — and the sanitiser was throwing them away, which left formulas that were complete, counted
+  // correctly by the check above, and visibly wrong. This is the assertion that can see the difference.
+  const formulaOffsets = await page.evaluate(() =>
+    [...document.querySelectorAll(".wysiwyg-editor .vlist > span")].map((node) => ({
+      inline: (node.getAttribute("style") ?? "").includes("top:"),
+      top: getComputedStyle(node).top,
+    })),
+  );
+  check(
+    "the offsets that position a formula's parts are kept (§12)",
+    formulaOffsets.some((entry) => entry.inline && entry.top !== "0px" && entry.top !== "auto"),
+    JSON.stringify(formulaOffsets.slice(0, 3)),
+  );
   check("formula source is hidden, not deleted", wysiwyg.hidden > 0, `${wysiwyg.hidden}`);
   await page.screenshot({ path: `${SHOTS}/e2e-wysiwyg.png` });
 

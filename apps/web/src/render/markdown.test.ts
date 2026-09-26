@@ -1,3 +1,4 @@
+import katex from "katex";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -104,42 +105,51 @@ $$`);
     expect(inline).not.toContain("katex-display");
   });
 
-  it("keeps the inline styles KaTeX positions its markup with", () => {
-    // KaTeX sets heights, widths and offsets inline: a fraction's halves are stacked by a `height`, a radical's rule
-    // by a `border-bottom-width`, a matrix cell's width by a `min-width`. The sanitizer filters style declarations
-    // through an allowlist, and the failure mode of a missing entry is not a rejected formula — it is a formula that
-    // renders and is visibly wrong, which no count of `.katex` elements can see. So the properties checked here are
-    // the ones KaTeX actually emits, rather than a list someone believed was right.
-    const sources = [
-      String.raw`$$\frac{a}{b}$$`,
-      String.raw`$$\sqrt{x^2+y^2}$$`,
-      String.raw`$$\int_0^1 x^2\,dx$$`,
-      String.raw`$$\sum_{i=1}^{n} i$$`,
-      String.raw`$$\begin{pmatrix} a & b \\ c & d \end{pmatrix}$$`,
-      String.raw`$$\lim_{x \to 0} \frac{\sin x}{x}$$`,
-      String.raw`$$\overline{AB}$$`,
-      String.raw`$$H\psi = E\psi$$`,
-      String.raw`$x^2$`,
+  it("keeps every inline style property KaTeX emits", () => {
+    // Written against KaTeX's own output, not against this application's pipeline. The first version of this test
+    // rendered through `renderMarkdown` — which sanitises — and then asked the sanitiser about the properties it found,
+    // so it could only ever see the properties that had already survived. It passed while six of KaTeX's properties
+    // were being dropped, including the `top` offsets that stack a limit above an integral. A test that reads its
+    // expectations from the thing it is testing is not a test.
+    const sources: ReadonlyArray<readonly [string, boolean]> = [
+      [String.raw`\int_0^1 x^2\,dx`, true],
+      [String.raw`\frac{a}{b}`, true],
+      [String.raw`\sqrt{x^2+y^2}`, true],
+      [String.raw`\sum_{i=1}^{n} i`, true],
+      [String.raw`\begin{pmatrix} a & b \\ c & d \end{pmatrix}`, true],
+      [String.raw`\lim_{x \to 0} \frac{\sin x}{x}`, true],
+      [String.raw`\overline{AB}`, true],
+      [String.raw`E = mc^2`, false],
+      [String.raw`\vec{v} \cdot \vec{w}`, false],
+      [String.raw`\hat{H}\psi = E\psi`, false],
     ];
 
-    const properties = new Set<string>();
-    for (const source of sources) {
-      for (const match of renderMarkdown(source).matchAll(/style="([^"]*)"/g)) {
+    const samples = new Map<string, string>();
+    for (const [tex, display] of sources) {
+      const html = katex.renderToString(tex, {
+        displayMode: display,
+        throwOnError: false,
+        trust: false,
+      });
+      for (const match of html.matchAll(/style="([^"]*)"/g)) {
         for (const declaration of (match[1] ?? "").split(";")) {
-          const name = declaration.split(":")[0]?.trim() ?? "";
-          if (/^[a-z-]+$/.test(name)) {
-            properties.add(name);
+          const [rawName, ...rest] = declaration.split(":");
+          const name = (rawName ?? "").trim();
+          const value = rest.join(":").trim();
+          // A declaration with no value is not a declaration: the markup contains attributes that merely look like
+          // one, and a property list built from those would be testing the parser rather than the sanitiser.
+          if (value !== "" && /^[a-z-]+$/.test(name) && !samples.has(name)) {
+            samples.set(name, value);
           }
         }
       }
     }
 
-    expect(properties.size).toBeGreaterThan(3);
-    for (const name of properties) {
-      const value = name === "position" ? "relative" : "1em";
+    expect(samples.size).toBeGreaterThan(8);
+    for (const [name, value] of samples) {
       expect(
         sanitizeCss(`${name}: ${value}`),
-        `${name} must survive the sanitizer or formulas lose their layout`,
+        `KaTeX's "${name}: ${value}" must survive the sanitiser or the formula loses its layout`,
       ).not.toBe("");
     }
   });

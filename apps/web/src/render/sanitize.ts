@@ -246,8 +246,11 @@ const ALLOWED_CSS: Readonly<Record<string, (value: string) => boolean>> = {
   "border-radius": isSimpleLength,
   display: (value) => /^(block|inline|inline-block|none|flex|grid|table)$/.test(value),
   "white-space": (value) => /^(normal|pre|pre-wrap|pre-line|nowrap)$/.test(value),
+  // Both forms: the keywords a note might write, and the length KaTeX uses to sit a radical or a limit against its
+  // base (`vertical-align: -0.9119em`).
   "vertical-align": (value) =>
-    /^(baseline|top|middle|bottom|sub|super|text-top|text-bottom)$/.test(value),
+    /^(baseline|top|middle|bottom|sub|super|text-top|text-bottom)$/.test(value) ||
+    isSimpleLength(value),
   opacity: (value) => /^(0|1|0?\.\d+)$/.test(value),
   "fill-opacity": (value) => /^(0|1|0?\.\d+)$/.test(value),
   "stroke-opacity": (value) => /^(0|1|0?\.\d+)$/.test(value),
@@ -258,6 +261,17 @@ const ALLOWED_CSS: Readonly<Record<string, (value: string) => boolean>> = {
   stroke: isSimpleColor,
   "stroke-width": (value) => /^\d{1,3}(\.\d+)?(px)?$/.test(value),
   "stroke-dasharray": (value) => /^[\d\s,.]+$/.test(value),
+  // Geometry, which KaTeX sets inline and cannot do without. This is where block formulas were broken: the markup was
+  // complete and every offset that places a limit above an integral, a superscript above its base, or the halves of a
+  // fraction one above the other was being thrown away as an unknown property. What survived — heights, widths,
+  // margins — was enough for the formula to look nearly right and be wrong, which is the worst kind of wrong.
+  top: isSimpleLength,
+  left: isSimpleLength,
+  "min-width": isSimpleLength,
+  "border-bottom-width": isSimpleLength,
+  // `fixed` and `sticky` are refused: an element positioned against the viewport could cover the interface around the
+  // note it was written in, and KaTeX only ever needs a containing block for its own offsets.
+  position: (value) => /^(static|relative|absolute)$/.test(value),
   "font-family": (value) => /^[\w\s,"'-]{1,80}$/.test(value),
   "text-anchor": (value) => /^(start|middle|end)$/.test(value),
   "dominant-baseline": (value) =>
