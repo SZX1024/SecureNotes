@@ -1851,6 +1851,50 @@ print(json.dumps({
     JSON.stringify(drawer),
   );
 
+  // A session that expires while someone is writing. The fix is a code, and asking for it here costs nothing; sending
+  // them to the sign-in screen costs the note they had open and anything unsaved in it.
+  await page.context().clearCookies();
+  await openPanel(page, "Sync and backup");
+  await page.getByRole("button", { name: "Sync now" }).click();
+  await page.waitForTimeout(2500);
+  const stateAfterExpiry = await page.evaluate(
+    () => document.querySelector('[data-testid="sync-state"]')?.textContent ?? "",
+  );
+  check(
+    "an expired session is reported rather than hidden (§3)",
+    /sign in again/i.test(stateAfterExpiry),
+    stateAfterExpiry.trim(),
+  );
+
+  await page.getByTestId("sync-state").click();
+  await page.waitForTimeout(1000);
+  check(
+    "and the code is asked for on the page rather than on another one (§22)",
+    (await page.locator('[role="dialog"][aria-label="Sign in again"]').count()) === 1,
+  );
+
+  // The username is known when the session came from a sign-in and empty after a recovery sign-in, in which case the
+  // dialog asks for it. Either way the code is what the dialog is for.
+  const nameField = page.getByLabel("Username");
+  if ((await nameField.count()) > 0) {
+    await nameField.first().fill("e2e-account");
+  }
+  await page.getByLabel("Authenticator code").fill(totpFromBase32(activeSecret));
+  await page.getByRole("button", { name: /sign in and sync/i }).click();
+  await page.waitForTimeout(3000);
+  check(
+    "the dialog closes once the session is restored (§22)",
+    (await page.locator('[role="dialog"][aria-label="Sign in again"]').count()) === 0,
+  );
+  const notesStillThere = await page.evaluate(
+    () => document.querySelectorAll(".note-list button").length,
+  );
+  check(
+    "and the notes are still on this device (§3)",
+    notesStillThere > 0,
+    `${notesStillThere} notes`,
+  );
+
   await page.setViewportSize({ width: 1440, height: 950 });
   await page.waitForTimeout(1000);
 } catch (error) {

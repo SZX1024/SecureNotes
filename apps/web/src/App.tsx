@@ -66,6 +66,7 @@ import { SettingsDialog } from "./ui/SettingsDialog";
 import { StatusBar } from "./ui/StatusBar";
 import { Tabs, type TabView } from "./ui/Tabs";
 import { ContextMenu, type ContextMenuState } from "./ui/ContextMenu";
+import { ReauthDialog } from "./ui/ReauthDialog";
 import {
   TOAST_DURATION_MS,
   autoDismisses,
@@ -245,6 +246,8 @@ export function App() {
   const [toast, setToast] = useState<Toast | null>(null);
   /** The open right-click menu, if any. One at a time, owned by whatever opened it. */
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  /** True while the session is being restored without leaving the page. */
+  const [reauthOpen, setReauthOpen] = useState(false);
   /** True while the pointer is over the message, which stops the clock rather than taking it away mid-sentence. */
   const [toastPaused, setToastPaused] = useState(false);
   /**
@@ -1095,6 +1098,56 @@ export function App() {
   );
 
   /** Moves the open note to the recycle bin (§19). */
+  /**
+   * Restores the session from inside the page (§3).
+   *
+   * The code re-derives the account key, so the thing worth checking is not whether the code is valid but whether it
+   * derives the key this device's notes are encrypted with. It is checked before anything is replaced: a key that does
+   * not match would leave every note unreadable, which would look like the application losing them.
+   */
+  const reauthenticate = useCallback(
+    async (username: string, code: string): Promise<string | null> => {
+      if (db === null || account === null) {
+        return "This device is not signed in.";
+      }
+      const result = await signIn({ username, code, db }).catch(() => null);
+      if (result === null) {
+        return "That code was not accepted.";
+      }
+      const unlocked = result.account;
+      if (unlocked.userId !== account.userId) {
+        return "That code belongs to a different account.";
+      }
+      if (unlocked.keyVersion !== account.keyVersion) {
+        return "This account's key changed on another device. Sign in from the sign-in screen.";
+      }
+
+      const candidate = {
+        db,
+        dek: unlocked.dek,
+        userId: unlocked.userId,
+        keyVersion: unlocked.keyVersion,
+      };
+      const readable = await readAllLocalNotes(candidate).catch(() => []);
+      const before = await readAllLocalNotes({
+        db,
+        dek: account.dek,
+        userId: account.userId,
+        keyVersion: account.keyVersion,
+      }).catch(() => []);
+      if (readable.length < before.length) {
+        return "That code derives a different key, so this device's notes cannot be read with it.";
+      }
+
+      setAccount(unlocked);
+      setReauthOpen(false);
+      scheduler.current?.syncNow();
+      setMessage("Signed in again. Syncing.");
+      return null;
+    },
+    [db, account, setMessage],
+  );
+
   const deleteCurrentNote = useCallback(() => {
     if (draft !== null) {
       void deleteNote(draft.id);
@@ -2210,6 +2263,14 @@ export function App() {
 
         {contextMenu && <ContextMenu menu={contextMenu} onClose={() => setContextMenu(null)} />}
 
+        {reauthOpen && account && (
+          <ReauthDialog
+            username={account.username}
+            onSubmit={reauthenticate}
+            onClose={() => setReauthOpen(false)}
+          />
+        )}
+
         {toast && (
           <div
             className={`toast toast-${toast.kind}`}
@@ -2366,6 +2427,12 @@ export function App() {
         noteCount={notes.filter((entry) => entry.note.deletedAt === null).length}
         version={__APP_VERSION__}
         onOpenSync={() => {
+          // A session that has expired is the one case where the panel is not the answer: the fix is a code, and it
+          // belongs in front of the person rather than behind a panel they have to find.
+          if (syncState === "auth-required") {
+            setReauthOpen(true);
+            return;
+          }
           setPanelView("sync");
           setSidebarVisible(true);
         }}

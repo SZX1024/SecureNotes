@@ -1478,3 +1478,19 @@ button.status-item:hover:not(:disabled) {
 .context-menu .menu-item.danger:hover:not(:disabled) {
   color: var(--danger);
 }
+
+/* Asking for a code without leaving the page (§3, §22). */
+.dialog.reauth {
+  width: min(28rem, 92vw);
+}
+
+.reauth-body {
+  display: grid;
+  gap: var(--space-5);
+  padding: var(--space-6);
+}
+
+.reauth-actions {
+  display: flex;
+  gap: var(--space-3);
+}
