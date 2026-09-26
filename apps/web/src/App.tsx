@@ -64,6 +64,13 @@ import { MenuBar, type MenuDefinition } from "./ui/MenuBar";
 import { SettingsDialog } from "./ui/SettingsDialog";
 import { StatusBar } from "./ui/StatusBar";
 import { Tabs, type TabView } from "./ui/Tabs";
+import {
+  TOAST_DURATION_MS,
+  autoDismisses,
+  toastRole,
+  type Toast,
+  type ToastKind,
+} from "./ui/toast";
 import { snippetOf } from "./ui/note-snippet";
 import { addTab, isDirty, loadTabs, neighbourAfterClose, removeTab, saveTabs } from "./ui/tabs";
 import { applyTypography, loadTypography, saveTypography, type Typography } from "./ui/typography";
@@ -233,7 +240,16 @@ export function App() {
       typeof localStorage === "undefined" ? null : loadEditorMode(localStorage),
     ),
   );
-  const [message, setMessage] = useState<string | null>(null);
+  const [toast, setToast] = useState<Toast | null>(null);
+  /** True while the pointer is over the message, which stops the clock rather than taking it away mid-sentence. */
+  const [toastPaused, setToastPaused] = useState(false);
+  /**
+   * Shows a message. Informational by default — it dismisses itself — and `"error"` for anything the person needs to
+   * read after looking away, which stays until it is dismissed.
+   */
+  const setMessage = useCallback((text: string | null, kind: ToastKind = "success") => {
+    setToast(text === null ? null : { kind, message: text });
+  }, []);
 
   // Held as state rather than refs: the render path reads both, and reading a ref
   // during render is exactly what React forbids. `useState` with a lazy initialiser
@@ -399,7 +415,7 @@ export function App() {
   /** Any 401 means the session is gone: discard local keys and re-authenticate. */
   const handleRevocation = useCallback(async () => {
     await lockAndForget("signed-out");
-    setMessage("Your session was revoked on another device. Sign in again.");
+    setMessage("Your session was revoked on another device. Sign in again.", "error");
   }, [lockAndForget]);
 
   /** Runs one sync pass and updates what the interface shows (§17). */
@@ -481,7 +497,7 @@ export function App() {
           await handleRevocation();
           return null;
         }
-        setMessage(error instanceof Error ? error.message : "Something went wrong");
+        setMessage(error instanceof Error ? error.message : "Something went wrong", "error");
         return null;
       }
     },
@@ -646,7 +662,7 @@ export function App() {
       setExportReminder(null);
       setMessage(`Exported ${sources.notes.length} note(s) as a plaintext ZIP.`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "The export failed.");
+      setMessage(error instanceof Error ? error.message : "The export failed.", "error");
     } finally {
       setExporting(false);
     }
@@ -681,6 +697,7 @@ export function App() {
     } catch (error) {
       setMessage(
         error instanceof Error ? error.message : "The recovery package could not be written.",
+        "error",
       );
     } finally {
       setExporting(false);
@@ -713,7 +730,10 @@ export function App() {
           collisions.attachments.length;
         setImportPrompt({ archive, collisions: total });
       } catch (error) {
-        setMessage(error instanceof Error ? error.message : "The archive could not be read.");
+        setMessage(
+          error instanceof Error ? error.message : "The archive could not be read.",
+          "error",
+        );
       }
     },
     [db],
@@ -774,7 +794,7 @@ export function App() {
         await refresh(db, account);
         scheduler.current?.scheduleAfterIdle();
       } catch (error) {
-        setMessage(error instanceof Error ? error.message : "The import failed.");
+        setMessage(error instanceof Error ? error.message : "The import failed.", "error");
       } finally {
         setImporting(false);
       }
@@ -830,7 +850,7 @@ export function App() {
         const holdsNotes = (await local.db.notes.where("folderId").equals(id).count()) > 0;
         const holdsChildren = (await local.db.folders.where("parentId").equals(id).count()) > 0;
         if (holdsNotes || holdsChildren) {
-          setMessage("Move its notes and subfolders out before deleting this folder.");
+          setMessage("Move its notes and subfolders out before deleting this folder.", "error");
           return;
         }
         await deleteLocalFolder(local, id);
@@ -1234,7 +1254,10 @@ export function App() {
           scheduler.current?.scheduleAfterIdle();
           setMessage("Image encrypted and attached. It uploads with the next sync.");
         } catch (error) {
-          setMessage(error instanceof Error ? error.message : "The image could not be attached.");
+          setMessage(
+            error instanceof Error ? error.message : "The image could not be attached.",
+            "error",
+          );
         }
       }
     },
@@ -1260,7 +1283,10 @@ export function App() {
           saveRichTextPreference(localStorage, "html");
         }
       } catch (error) {
-        setMessage(error instanceof Error ? error.message : "The paste could not be converted.");
+        setMessage(
+          error instanceof Error ? error.message : "The paste could not be converted.",
+          "error",
+        );
       }
     },
     [insertIntoDraft],
@@ -1290,7 +1316,7 @@ export function App() {
       } else if (decision.kind === "insert-html") {
         void applyRichText(decision.html, false);
       } else {
-        setMessage(decision.reason);
+        setMessage(decision.reason, "error");
       }
     },
     [insertIntoDraft, richTextPreference, uploadImages, applyRichText],
@@ -1330,6 +1356,16 @@ export function App() {
     setTypography(next);
     saveTypography(localStorage, next);
   }, []);
+
+  // The clock on a message that dismisses itself. Tracked so it is cleared on unmount — a timer that outlives the
+  // component is how a `ReferenceError: window is not defined` reached the test suite once already.
+  useEffect(() => {
+    if (toast === null || !autoDismisses(toast.kind) || toastPaused) {
+      return;
+    }
+    const timer = window.setTimeout(() => setToast(null), TOAST_DURATION_MS);
+    return () => window.clearTimeout(timer);
+  }, [toast, toastPaused]);
 
   /** The hidden import input: the File menu item is an ordinary action, the input keeps its label. */
   const importInput = useRef<HTMLInputElement>(null);
@@ -1635,7 +1671,7 @@ export function App() {
         <AppVersion />
         <LoginScreen
           db={db}
-          message={message}
+          message={toast?.message ?? null}
           onSignedIn={async (unlocked, mustRebindTotp) => {
             setMustRebind(mustRebindTotp);
             setAccount(unlocked);
@@ -1664,7 +1700,7 @@ export function App() {
         <AppVersion />
         <UnlockScreen
           db={db}
-          message={message}
+          message={toast?.message ?? null}
           onUnlocked={async (unlocked) => {
             setAccount(unlocked);
             keyStore.unlock(
@@ -2091,10 +2127,27 @@ export function App() {
           )}
         </section>
 
-        {message && (
-          <div className="toast" role="status">
-            {message}
-            <button type="button" onClick={() => setMessage(null)}>
+        {toast && (
+          <div
+            className={`toast toast-${toast.kind}`}
+            role={toastRole(toast.kind)}
+            onMouseEnter={() => setToastPaused(true)}
+            onMouseLeave={() => setToastPaused(false)}
+          >
+            <span>{toast.message}</span>
+            {toast.action && (
+              <button
+                type="button"
+                className="toast-action"
+                onClick={() => {
+                  toast.action?.run();
+                  setToast(null);
+                }}
+              >
+                {toast.action.label}
+              </button>
+            )}
+            <button type="button" onClick={() => setToast(null)}>
               Dismiss
             </button>
           </div>

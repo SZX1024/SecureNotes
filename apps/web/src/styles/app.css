@@ -249,16 +249,38 @@ textarea:focus {
 
 .toast {
   position: fixed;
-  bottom: 1rem;
+  bottom: calc(var(--status-height) + var(--space-4));
   left: 50%;
+  z-index: 50;
   display: flex;
-  gap: 0.75rem;
+  gap: var(--space-4);
   align-items: center;
-  padding: 0.5rem 0.75rem;
+  max-width: min(46rem, 92vw);
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--text);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-popover);
   transform: translateX(-50%);
-  border: 1px solid var(--border);
-  border-radius: 0.5rem;
-  background: Canvas;
+}
+
+/* A failure is stated rather than tinted: it is the message that stays, so it has to be legible for as long as
+   someone needs it. */
+.toast-error {
+  color: var(--text-strong);
+  border-color: var(--danger);
+}
+
+.toast-action {
+  color: var(--accent-text);
+  background: var(--accent);
+}
+
+.toast-action:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: transparent;
 }
 
 .palette {

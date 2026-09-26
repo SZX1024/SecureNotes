@@ -776,6 +776,22 @@ try {
     /Move its notes and subfolders out/i.test(refusal),
   );
 
+  // A failure stays until it is dismissed: it is the message someone reads after looking away, and one that vanishes
+  // on its own is the easiest way to miss a problem.
+  await page.waitForTimeout(4500);
+  const refusalStillThere = await page.evaluate(() =>
+    [...document.querySelectorAll(".toast")].some((node) =>
+      (node.textContent ?? "").includes("Move its notes and subfolders out"),
+    ),
+  );
+  check("a failure stays until it is dismissed (§22)", refusalStillThere);
+  await page
+    .locator(".toast button", { hasText: "Dismiss" })
+    .first()
+    .click()
+    .catch(() => undefined);
+  await page.waitForTimeout(400);
+
   // And the organisation reaches the server. Whether a pass runs at all decides where a failure lies, so
   // record what the click produces instead of waiting a fixed time and inspecting the server afterwards.
   const callsBefore = noteCalls.length;
@@ -1165,15 +1181,30 @@ print(json.dumps({"names": names, "format": manifest["format"], "version": manif
       timeout: 20_000,
     });
     await page.getByRole("button", { name: "Merge", exact: true }).click();
-    await page.waitForTimeout(6000);
+    // The message is caught while it is on screen. A confirmation dismisses itself after a few seconds, so a check
+    // that reads the page afterwards is checking whether the message has gone rather than whether it arrived.
+    let importMessage = "";
+    for (
+      let attempt = 0;
+      attempt < 24 && !/Imported \d+ new item/.test(importMessage);
+      attempt += 1
+    ) {
+      importMessage = await page.evaluate(
+        () => document.querySelector(".toast")?.textContent ?? "",
+      );
+      await page.waitForTimeout(500);
+    }
     const notesAfterMerge = await storedNoteCount();
     check(
       "merging an archive that is already here changes nothing (§20)",
       notesAfterMerge === notesAfterCopies,
       `${notesAfterCopies} -> ${notesAfterMerge}`,
     );
-    const importMessage = await page.evaluate(() => document.body.innerText);
-    check("the import reports what it did", /Imported \d+ new item/.test(importMessage), "");
+    check(
+      "the import reports what it did",
+      /Imported \d+ new item/.test(importMessage),
+      importMessage.slice(0, 60),
+    );
 
     // 9b2. Image operations with no network (§32). This is what the local-first design is for: the bytes are
     // encrypted here, the reference goes into the note, and the upload waits for the network. Proven by going
