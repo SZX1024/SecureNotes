@@ -285,6 +285,27 @@ try {
 
   check("formulas render", preview.katex >= 3, `${preview.katex}`);
 
+  // A superscript is shrunk by a class the stylesheet has to recognise. Two KaTeX versions were installed — the app's
+  // and the one rehype-katex brought with it — and they emit different names for that class, so the editor's
+  // superscripts were the right size and the preview's were the size of the text around them. Nothing but measuring
+  // the rendered sizes can see that: both render, both are complete, and one of them looks wrong.
+  const previewFormula = await page.evaluate(() => {
+    const katex = document.querySelector(".preview .katex");
+    const sizing = katex?.querySelector("[class*=size]") ?? null;
+    return {
+      base: katex ? Number.parseFloat(getComputedStyle(katex).fontSize) : 0,
+      superscript: sizing ? Number.parseFloat(getComputedStyle(sizing).fontSize) : 0,
+      className: sizing?.className ?? null,
+    };
+  });
+  check(
+    "a formula's superscript is smaller than its base (§12)",
+    previewFormula.base > 0 &&
+      previewFormula.superscript > 0 &&
+      previewFormula.superscript < previewFormula.base,
+    JSON.stringify(previewFormula),
+  );
+
   // Rendering is not the same as rendering correctly, and counting `.katex` elements cannot tell the difference — the
   // markup is all there whether or not the stylesheet that gives it meaning was ever loaded. The thickness of a
   // fraction's rule and the centring of display maths come from that stylesheet and from nowhere else, so they are

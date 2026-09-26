@@ -13,8 +13,10 @@ import {
 } from "./tabs";
 
 describe("open notes", () => {
-  it("adds without duplicating, most recent last", () => {
-    expect(addTab(["a", "b"], "a")).toEqual(["b", "a"]);
+  it("appends a new note and leaves an open one exactly where it is", () => {
+    // Activating a tab must not move it: a strip whose order changes under the cursor is a strip you cannot learn.
+    expect(addTab(["a", "b"], "a")).toEqual(["a", "b"]);
+    expect(addTab(["a", "b"], "c")).toEqual(["a", "b", "c"]);
     expect(addTab([], "a")).toEqual(["a"]);
   });
 

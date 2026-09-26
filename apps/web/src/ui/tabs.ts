@@ -16,10 +16,21 @@ export const OPEN_TABS_STORAGE_KEY = "securenotes.openTabs";
  */
 export const MAX_OPEN_TABS = 12;
 
-/** The list with `id` added, most recent last, without duplicates. */
+/**
+ * The list with `id` added at the end.
+ *
+ * A note that is already open keeps the place it has: activating a tab is not a reason for it to move, and a strip
+ * whose tabs rearrange themselves under the cursor is a strip you cannot learn. The first version of this moved the
+ * note to the end — "most recent last" — and that is exactly what it looked like in use.
+ *
+ * When the list is full the oldest entry goes, which is the one that has been open longest rather than the one least
+ * recently looked at: the alternative is a tab disappearing from under someone who was working in it a moment ago.
+ */
 export function addTab(tabs: readonly string[], id: string): string[] {
-  const without = tabs.filter((entry) => entry !== id);
-  const next = [...without, id];
+  if (tabs.includes(id)) {
+    return [...tabs];
+  }
+  const next = [...tabs, id];
   return next.length > MAX_OPEN_TABS ? next.slice(next.length - MAX_OPEN_TABS) : next;
 }
 
