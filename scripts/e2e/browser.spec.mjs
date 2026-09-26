@@ -1764,8 +1764,10 @@ print(json.dumps({
     `${afterRestore} -> ${finalCount}`,
   );
 
-  // The quicker ways to reach a deletion. Nothing here clicks a note row: a pointer click on the list stalls the way
-  // the editor's own buttons do, and the shortcuts and the menu are what a person would use anyway.
+  // The quicker ways to reach a deletion: the menu, and the keyboard. Both are checked the way a person uses them —
+  // a right-click, and a key press — rather than by finding a button to click, which is what these entries are for. A
+  // row's own delete control was written and then dropped: adding any control to a note row made every click on the
+  // list stall, so three entry points that work beat four with a list that cannot be clicked.
   await openPanel(page, "Notes");
   await page.waitForTimeout(1200);
   const beforeShortcut = await listCount();
