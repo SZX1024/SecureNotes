@@ -232,6 +232,8 @@ export function App() {
   const scheduler = useRef<SyncScheduler | null>(null);
   /** The pending retry, so it can be cancelled with the scheduler it belongs to. */
   const retryTimer = useRef<number | null>(null);
+  /** The file picker behind "Attach files", which has to be reachable with no attachment yet in the note. */
+  const attachInput = useRef<HTMLInputElement | null>(null);
   /** The references the note had when it was opened, for the save-time diff. */
   const [openedRefs, setOpenedRefs] = useState<string[]>([]);
   const [editorMode, setEditorMode] = useState<EditorMode>(() =>
@@ -1336,7 +1338,9 @@ export function App() {
             baseRevision: null,
           });
 
-          body = `${body}${body.endsWith("\n") || body.length === 0 ? "" : "\n"}${attachmentMarkdown(attachmentId, filename)}\n`;
+          // The reference is written from the file's own type, not from the response: a picture is embedded, and
+          // anything else is a link, which is what keeps a document out of an <img>.
+          body = `${body}${body.endsWith("\n") || body.length === 0 ? "" : "\n"}${attachmentMarkdown(attachmentId, filename, file.type)}\n`;
           setDraft((current) =>
             current && current.id === noteId ? { ...current, body } : current,
           );
@@ -1404,7 +1408,7 @@ export function App() {
         insertIntoDraft(decision.text);
       } else if (decision.kind === "ask-rich-text") {
         setPastePrompt({ html: decision.html, text: decision.text });
-      } else if (decision.kind === "attach-image") {
+      } else if (decision.kind === "attach-file") {
         void uploadImages([decision.file]);
       } else if (decision.kind === "insert-html") {
         void applyRichText(decision.html, false);
@@ -1415,7 +1419,7 @@ export function App() {
     [insertIntoDraft, richTextPreference, uploadImages, applyRichText, setMessage],
   );
 
-  /** Applies the drop rules (§12: images only, with a size limit). */
+  /** Applies the drop rules (§12 as amended: any file, with a size limit). */
   const handleDrop = useCallback(
     (event: React.DragEvent) => {
       const files = [...(event.dataTransfer?.files ?? [])];
@@ -2201,14 +2205,16 @@ export function App() {
                       <li key={attachment.id}>
                         <a
                           // The endpoint serves ciphertext, so opening it hands the user an unreadable file: the
-                          // link points at the decrypted bytes once they have been read.
+                          // link points at the decrypted bytes once they have been read. `download` gives the file
+                          // back the name it was uploaded under instead of the random identifier it is stored as.
                           href={
                             attachmentUrls?.get(attachment.id) ??
                             `${ATTACHMENT_URL_PREFIX}${attachment.id}/content`
                           }
+                          download={attachment.label}
                           target="_blank"
                           rel="noreferrer"
-                          title={attachment.id}
+                          title={attachment.label}
                         >
                           {attachment.label.length > 0
                             ? attachment.label
@@ -2230,6 +2236,27 @@ export function App() {
                 </section>
               )}
               <footer>
+                {/* Any file, from a picker rather than only from the clipboard: pasting a fifty megabyte archive is not
+                    something anyone does twice. The input stays hidden and the button opens it, so the control is the
+                    same shape as the rest of the footer. */}
+                <input
+                  ref={attachInput}
+                  type="file"
+                  multiple
+                  hidden
+                  aria-label="Attach files"
+                  onChange={(event) => {
+                    const files = [...(event.target.files ?? [])];
+                    // Cleared so choosing the same file again still fires a change.
+                    event.target.value = "";
+                    if (files.length > 0) {
+                      void uploadImages(files);
+                    }
+                  }}
+                />
+                <button type="button" onClick={() => attachInput.current?.click()}>
+                  Attach files…
+                </button>
                 <button type="button" className="primary" onClick={() => void saveDraft()}>
                   Save (Ctrl+S)
                 </button>

@@ -148,8 +148,8 @@ export function authBodyGuard(): MiddlewareHandler<AppBindings> {
 }
 
 /**
- * Multipart ceiling: the 20 MB attachment limit plus room for the form headers
- * and the base64-free metadata part.
+ * Multipart ceiling: the attachment limit plus room for the form headers and the
+ * base64-free metadata part.
  */
 export const MAX_MULTIPART_BODY_BYTES = MAX_ATTACHMENT_BYTES + 64 * 1024;
 

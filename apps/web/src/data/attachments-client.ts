@@ -237,7 +237,7 @@ export async function uploadAttachment(input: AttachmentUploadInput): Promise<Up
 
   return {
     id: payload.data.attachment.id,
-    markdown: attachmentMarkdown(payload.data.attachment.id, file.name),
+    markdown: attachmentMarkdown(payload.data.attachment.id, file.name, file.type),
   };
 }
 

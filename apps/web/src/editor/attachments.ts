@@ -29,9 +29,12 @@ export function attachmentRefsIn(markdown: string): string[] {
  * The alt text is the filename the user saw, which is presentation only: the
  * reference itself is the id.
  */
-export function attachmentMarkdown(id: string, filename: string): string {
+export function attachmentMarkdown(id: string, filename: string, contentType?: string): string {
   const alt = filename.replace(/[[\]]/g, "").trim();
-  return `![${alt}](${ATTACHMENT_URL_PREFIX}${id}/content)`;
+  // An image becomes a picture; anything else becomes a link to itself. Embedding a document as an image would put a
+  // broken picture in the note — the reference is syntax, and only the syntax that fits the file is written.
+  const isImage = (contentType ?? "").toLowerCase().startsWith("image/");
+  return `${isImage ? "!" : ""}[${alt}](${ATTACHMENT_URL_PREFIX}${id}/content)`;
 }
 
 export interface AttachmentRefDiff {

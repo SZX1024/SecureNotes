@@ -237,12 +237,24 @@ describe("attachments (§9, §14)", () => {
     expect(await testEnv.ATTACHMENTS.get("attachments/att-lie")).toBeNull();
   });
 
-  it("rejects a non-image content type", async () => {
-    const response = await uploadAttachment("att-not-image", { contentType: "text/plain" });
-    expect(response.status).toBe(415);
+  it("accepts a file that is not an image (§9 as amended)", async () => {
+    const response = await uploadAttachment("att-pdf", { contentType: "application/pdf" });
+    expect(response.status).toBe(201);
   });
 
-  it("rejects an upload over the 20 MB ceiling", async () => {
+  it("rejects something that is not a media type at all", async () => {
+    // The stored value is echoed back in a response header, so it must not be able to
+    // carry one of its own.
+    const plain = await uploadAttachment("att-not-a-type", { contentType: "plaintext" });
+    expect(plain.status).toBe(415);
+
+    const injected = await uploadAttachment("att-injected", {
+      contentType: "text/plain\r\nX-Injected: 1",
+    });
+    expect(injected.status).toBe(415);
+  });
+
+  it("rejects an upload over the 60 MB ceiling", async () => {
     const response = await uploadAttachment("att-too-big", { bytes: MAX_ATTACHMENT_BYTES + 1 });
     expect(response.status).toBe(413);
   });

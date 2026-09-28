@@ -59,10 +59,10 @@ opening the file. Regenerating it is part of the gate: an item whose evidence di
 | Editor | Tables work in both modes | ✅ | `apps/web/src/render/markdown.test.ts:67` |
 | Editor | Task lists work | ✅ | `apps/web/src/render/sanitize.test.ts:101` |
 | Editor | Paste/drop handling works | ✅ | `scripts/e2e/browser.spec.mjs:925` |
-| Data lifecycle | Recycle bin works for 30 days | ✅ | `apps/worker/test/tags-attachments.test.ts:324` |
+| Data lifecycle | Recycle bin works for 30 days | ✅ | `apps/worker/test/tags-attachments.test.ts:336` |
 | Data lifecycle | Permanent deletion removes required history | ✅ | `apps/worker/test/notes.test.ts:307` |
 | Data lifecycle | Historical versions are limited to 10 | ✅ | `apps/worker/test/notes.test.ts:235` |
-| Data lifecycle | R2 orphan cleanup is asynchronous and idempotent | ✅ | `apps/worker/test/tags-attachments.test.ts:250` |
+| Data lifecycle | R2 orphan cleanup is asynchronous and idempotent | ✅ | `apps/worker/test/tags-attachments.test.ts:262` |
 | Data lifecycle | Import is fully transactional | ✅ | `apps/web/src/export/import.test.ts:257` |
 | Data lifecycle | Export produces valid ZIP data | ✅ | `scripts/e2e/browser.spec.mjs:1108` |
 | Data lifecycle | Recovery package is separate from ordinary export | ✅ | `scripts/e2e/browser.spec.mjs:1377` |

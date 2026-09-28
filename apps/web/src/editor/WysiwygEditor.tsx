@@ -88,6 +88,26 @@ export function WysiwygEditor({
           image.setAttribute("src", resolved);
         }
       }
+      // A file that is not a picture is referenced as a link, and its target is the same ciphertext endpoint. It is
+      // rewritten the same way, and given the name it was uploaded under so clicking it saves it as that rather than as
+      // the identifier it is stored by.
+      for (const link of element.querySelectorAll<HTMLAnchorElement>("a[href]")) {
+        const id = attachmentIdFromUrl(link.getAttribute("href") ?? "");
+        if (id === null) {
+          continue;
+        }
+        const resolved = urlForAttachment(id);
+        if (resolved === null) {
+          continue;
+        }
+        if (link.getAttribute("href") !== resolved) {
+          link.setAttribute("href", resolved);
+        }
+        const name = link.textContent?.trim() ?? "";
+        if (name.length > 0 && link.getAttribute("download") !== name) {
+          link.setAttribute("download", name);
+        }
+      }
     };
 
     const observer = new MutationObserver(() => {

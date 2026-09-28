@@ -367,7 +367,7 @@ describe("CHECK constraints", () => {
     expect(await countRows("SELECT count(*) AS c FROM folders WHERE user_id = ?1", user)).toBe(2);
   });
 
-  it("enforces the 20 MB limit and the images-only rule for attachments (§9)", async () => {
+  it("enforces the 60 MB limit and the media-type rule for attachments (§9 as amended)", async () => {
     const user = "attachment-limits-user";
     await createUser(user);
 
@@ -375,16 +375,20 @@ describe("CHECK constraints", () => {
       /CHECK constraint failed/,
     );
     await expect(
-      createAttachment("att-too-big", user, { sizeBytes: 20 * 1024 * 1024 + 1 }),
+      createAttachment("att-too-big", user, { sizeBytes: 60 * 1024 * 1024 + 1 }),
     ).rejects.toThrow(/CHECK constraint failed/);
+    // The type may be anything, but it still has to be a type: a bare word is not one.
     await expect(
-      createAttachment("att-not-image", user, { contentType: "text/plain" }),
+      createAttachment("att-not-a-type", user, { contentType: "plaintext" }),
     ).rejects.toThrow(/CHECK constraint failed/);
 
-    await createAttachment("att-exact-limit", user, { sizeBytes: 20 * 1024 * 1024 });
+    await createAttachment("att-exact-limit", user, { sizeBytes: 60 * 1024 * 1024 });
     await createAttachment("att-gif", user, { contentType: "image/gif", sizeBytes: 1 });
+    // A document and an archive are attachments now, and the schema is what says so.
+    await createAttachment("att-pdf", user, { contentType: "application/pdf", sizeBytes: 1 });
+    await createAttachment("att-zip", user, { contentType: "application/zip", sizeBytes: 1 });
     expect(await countRows("SELECT count(*) AS c FROM attachments WHERE user_id = ?1", user)).toBe(
-      2,
+      4,
     );
   });
 

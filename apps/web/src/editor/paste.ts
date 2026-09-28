@@ -13,8 +13,8 @@ import { MAX_ATTACHMENT_BYTES } from "@securenotes/shared";
 export type RichTextPreference = "html" | "plain" | null;
 
 export type PasteDecision =
-  /** A clipboard image becomes an attachment immediately (§12). */
-  | { kind: "attach-image"; file: File }
+  /** A file on the clipboard becomes an attachment immediately (§12). */
+  | { kind: "attach-file"; file: File }
   | { kind: "ask-rich-text"; html: string; text: string }
   | { kind: "insert-html"; html: string }
   | { kind: "insert-text"; text: string }
@@ -36,21 +36,22 @@ export interface PasteInput {
 /**
  * Decides what a paste should do.
  *
- * Order matters: an image on the clipboard wins over the text representation a
- * screenshot also provides, because the image is what the user copied.
+ * Order matters: a file on the clipboard wins over the text representation the same
+ * copy also provides, because the file is what the user copied. Any file, not only an
+ * image — a copied document or archive is an attachment too.
  */
 export function decidePaste(input: PasteInput): PasteDecision {
   for (const item of input.items) {
-    if (item.kind === "file" && item.type.startsWith("image/")) {
+    if (item.kind === "file") {
       const file = item.getAsFile();
       if (file) {
         if (file.size > MAX_ATTACHMENT_BYTES) {
           return {
             kind: "reject",
-            reason: `Images are limited to ${formatMegabytes(MAX_ATTACHMENT_BYTES)}.`,
+            reason: `Files are limited to ${formatMegabytes(MAX_ATTACHMENT_BYTES)}.`,
           };
         }
-        return { kind: "attach-image", file };
+        return { kind: "attach-file", file };
       }
     }
   }
@@ -79,14 +80,14 @@ export function decidePaste(input: PasteInput): PasteDecision {
 }
 
 export type DropDecision =
-  { kind: "attach-images"; files: File[] } | { kind: "reject"; reason: string };
+  { kind: "attach-files"; files: File[] } | { kind: "reject"; reason: string };
 
 /**
  * Decides what a drag-and-drop should do.
  *
- * §12 allows images only, and rejects anything over 20 MB. A mixed drop is rejected
- * as a whole rather than silently partially accepted, so the user is not left
- * wondering which of three files actually arrived.
+ * Any file (§12 as amended), up to the size limit. A drop is rejected as a whole rather
+ * than silently partially accepted, so the user is not left wondering which of three
+ * files actually arrived.
  */
 export function decideDrop(files: readonly { type: string; size: number }[]): DropDecision {
   if (files.length === 0) {
@@ -101,12 +102,7 @@ export function decideDrop(files: readonly { type: string; size: number }[]): Dr
     };
   }
 
-  const notAnImage = files.find((file) => !file.type.startsWith("image/"));
-  if (notAnImage) {
-    return { kind: "reject", reason: "Only images can be dropped into a note." };
-  }
-
-  return { kind: "attach-images", files: files as File[] };
+  return { kind: "attach-files", files: files as File[] };
 }
 
 export function formatMegabytes(bytes: number): string {

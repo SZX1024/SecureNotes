@@ -7,11 +7,12 @@ import { syncChangeStatement } from "./records";
 /**
  * Attachments (§9).
  *
- * Only images, at most 20 MB. The object key is random, the original filename is
- * encrypted, and the bytes stored in R2 are the client's ciphertext — the worker
- * never sees the image itself.
+ * Any file, at most 60 MB. The object key is random, the original filename is
+ * encrypted, and the bytes stored in R2 are the client's ciphertext — the worker never
+ * sees the file itself, and the media type is the only thing about a file's content
+ * that it learns.
  *
- * An attachment is an independent entity because one image can be referenced by
+ * An attachment is an independent entity because one file can be referenced by
  * several notes, so deletion is reference-counted: reaching zero enqueues an
  * asynchronous R2 deletion rather than blocking the user's operation (§9).
  */
@@ -98,11 +99,20 @@ export interface UploadInput {
 }
 
 /**
+ * A media type, and nothing else. The stored value is echoed back in a response
+ * header, so it must not be able to carry anything but a type: `text/plain\r\nX-…`
+ * would be a header injection, and it is exactly what a check that only tests for a
+ * `/` would let through. Keeping the grammar strict is what makes widening the rule
+ * from `image/%` to "any type" safe.
+ */
+const MEDIA_TYPE = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/i;
+
+/**
  * Stores an uploaded attachment.
  *
- * The declared size and the real size must agree: the 20 MB limit is only
- * meaningful if the client cannot understate what it sent, and `size_bytes` is
- * what the eviction and quota logic later trusts.
+ * The declared size and the real size must agree: the limit is only meaningful if the
+ * client cannot understate what it sent, and `size_bytes` is what the eviction and
+ * quota logic later trusts.
  */
 export async function storeAttachment(
   env: Env,
@@ -110,14 +120,18 @@ export async function storeAttachment(
   input: UploadInput,
   nowMs: number,
 ): Promise<AttachmentRow> {
-  if (!input.contentType.toLowerCase().startsWith("image/")) {
-    throw new ApiError("UNSUPPORTED_MEDIA_TYPE", { diagnostic: "only images are supported" });
+  if (!MEDIA_TYPE.test(input.contentType)) {
+    throw new ApiError("UNSUPPORTED_MEDIA_TYPE", {
+      diagnostic: "the content type is not a media type",
+    });
   }
   if (input.blob.byteLength === 0) {
     throw new ApiError("VALIDATION_FAILED", { diagnostic: "the upload is empty" });
   }
   if (input.blob.byteLength > MAX_ATTACHMENT_BYTES) {
-    throw new ApiError("PAYLOAD_TOO_LARGE", { diagnostic: "attachments are limited to 20 MB" });
+    throw new ApiError("PAYLOAD_TOO_LARGE", {
+      diagnostic: `attachments are limited to ${Math.round(MAX_ATTACHMENT_BYTES / (1024 * 1024))} MB`,
+    });
   }
   // AES-GCM appends a 16-byte tag, so ciphertext = plaintext + 16 exactly. Checking it
   // binds the two declared numbers to each other: a client cannot claim a small

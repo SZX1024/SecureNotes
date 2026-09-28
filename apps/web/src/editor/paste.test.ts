@@ -16,6 +16,15 @@ function imageItem(type = "image/png", size = 1024): PasteItem & { size: number 
   return { kind: "file", type, getAsFile: () => file, size };
 }
 
+/** A file of any type on the clipboard. */
+function fileItem(type: string): PasteItem {
+  return {
+    kind: "file",
+    type,
+    getAsFile: () => new File([new Uint8Array([1, 2, 3])], "archive.zip", { type }),
+  };
+}
+
 describe("paste (§12)", () => {
   it("turns a clipboard image into an attachment", () => {
     const decision = decidePaste({
@@ -25,7 +34,30 @@ describe("paste (§12)", () => {
       richTextPreference: null,
     });
 
-    expect(decision.kind).toBe("attach-image");
+    expect(decision.kind).toBe("attach-file");
+  });
+
+  it("turns any pasted file into an attachment, not only a picture", () => {
+    const decision = decidePaste({
+      items: [fileItem("application/zip")],
+      html: null,
+      text: null,
+      richTextPreference: null,
+    });
+
+    expect(decision.kind).toBe("attach-file");
+  });
+
+  it("attaches a file whose type the clipboard does not report", () => {
+    // An extensionless file arrives with an empty type, and it is still a file.
+    const decision = decidePaste({
+      items: [fileItem("")],
+      html: null,
+      text: null,
+      richTextPreference: null,
+    });
+
+    expect(decision.kind).toBe("attach-file");
   });
 
   it("prefers the image when the clipboard also carries text", () => {
@@ -38,7 +70,7 @@ describe("paste (§12)", () => {
       richTextPreference: null,
     });
 
-    expect(decision.kind).toBe("attach-image");
+    expect(decision.kind).toBe("attach-file");
   });
 
   it("rejects an image over the limit", () => {
@@ -104,29 +136,33 @@ describe("paste (§12)", () => {
   });
 });
 
-describe("drop (§12: images only, 20 MB limit)", () => {
+describe("drop (§12 as amended: any file, with a size limit)", () => {
   it("accepts images", () => {
     const decision = decideDrop([
       { type: "image/png", size: 1000 },
       { type: "image/jpeg", size: 2000 },
     ]);
 
-    expect(decision.kind).toBe("attach-images");
-    expect(decision.kind === "attach-images" && decision.files).toHaveLength(2);
+    expect(decision.kind).toBe("attach-files");
+    expect(decision.kind === "attach-files" && decision.files).toHaveLength(2);
   });
 
-  it("rejects anything that is not an image", () => {
-    const decision = decideDrop([{ type: "application/pdf", size: 10 }]);
+  it("accepts files that are not images", () => {
+    const decision = decideDrop([
+      { type: "application/pdf", size: 10 },
+      { type: "", size: 10 },
+      { type: "application/zip", size: 10 },
+    ]);
 
-    expect(decision.kind).toBe("reject");
-    expect(decision.kind === "reject" && decision.reason).toContain("Only images");
+    expect(decision.kind).toBe("attach-files");
+    expect(decision.kind === "attach-files" && decision.files).toHaveLength(3);
   });
 
-  it("rejects a mixed drop as a whole rather than part of it", () => {
+  it("rejects a mixed drop that contains one file over the limit, as a whole", () => {
     // Silently accepting one of two files would leave the user unsure what arrived.
     const decision = decideDrop([
-      { type: "image/png", size: 10 },
       { type: "text/plain", size: 10 },
+      { type: "application/zip", size: MAX_ATTACHMENT_BYTES + 1 },
     ]);
 
     expect(decision.kind).toBe("reject");
@@ -140,8 +176,8 @@ describe("drop (§12: images only, 20 MB limit)", () => {
   });
 
   it("accepts a file exactly at the limit", () => {
-    expect(decideDrop([{ type: "image/png", size: MAX_ATTACHMENT_BYTES }]).kind).toBe(
-      "attach-images",
+    expect(decideDrop([{ type: "application/zip", size: MAX_ATTACHMENT_BYTES }]).kind).toBe(
+      "attach-files",
     );
   });
 
@@ -150,6 +186,6 @@ describe("drop (§12: images only, 20 MB limit)", () => {
   });
 
   it("formats the limit for the user", () => {
-    expect(formatMegabytes(MAX_ATTACHMENT_BYTES)).toBe("20 MB");
+    expect(formatMegabytes(MAX_ATTACHMENT_BYTES)).toBe("60 MB");
   });
 });

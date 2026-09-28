@@ -45,8 +45,12 @@ export const AUDIT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 export const RECYCLE_BIN_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 export const TOMBSTONE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
-/** §9: attachments are images of at most 20 MB; folders nest at most 10 deep. */
-export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+/**
+ * §9 as amended: an attachment is any file of at most 60 MB. The ceiling is what fits in a
+ * browser's memory while it is encrypted on the device before upload, and it sits well below the
+ * request body limit of the platform it is uploaded to. Folders nest at most 10 deep.
+ */
+export const MAX_ATTACHMENT_BYTES = 60 * 1024 * 1024;
 export const MAX_FOLDER_DEPTH = 10;
 export const MAX_TAGS_PER_NOTE = 10;
 

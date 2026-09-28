@@ -55,7 +55,17 @@ describe("building a reference", () => {
 
   it("cannot break out of the alt text", () => {
     // Brackets are removed rather than escaped, so the alt text cannot close early.
-    expect(attachmentMarkdown(A, "a]b[c.png")).toContain("![abc.png]");
+    expect(attachmentMarkdown(A, "a]b[c.png", "image/png")).toContain("![abc.png]");
+    expect(attachmentMarkdown(A, "a]b[c.zip", "application/zip")).toContain("[abc.zip]");
+  });
+
+  it("embeds a picture and links to anything else", () => {
+    // A document inside an <img> is a broken picture in the note; the reference has to be the syntax that fits.
+    expect(attachmentMarkdown(A, "shot.png", "image/png")).toContain("![shot.png]");
+    expect(attachmentMarkdown(A, "archive.zip", "application/zip")).toContain("[archive.zip]");
+    expect(attachmentMarkdown(A, "archive.zip", "application/zip")).not.toContain("![");
+    // An unknown type is not an image, so it is a link.
+    expect(attachmentMarkdown(A, "mystery", "")).toContain("[mystery]");
   });
 });
 
