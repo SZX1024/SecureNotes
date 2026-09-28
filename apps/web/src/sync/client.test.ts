@@ -81,6 +81,9 @@ describe("an attachment queued while offline", () => {
       cachedAt: 1,
       contentIv: envelope.iv,
       plaintextSizeBytes: bytes.byteLength,
+      // Chosen when the file was attached, and it has to survive until the upload happens: the queue may only drain
+      // days later, on a device that was offline.
+      expiresAt: 1_900_000_000_000,
       createdAt: 1,
       syncedAt: null,
     });
@@ -114,6 +117,7 @@ describe("an attachment queued while offline", () => {
     const metadata = JSON.parse(String(body!.get("metadata")));
     expect(metadata.contentIv).toBe(envelope.iv);
     expect(metadata.sizeBytes).toBe(ciphertext.byteLength);
+    expect(metadata.expiresAt).toBe(1_900_000_000_000);
 
     // The blob is the ciphertext that was stored, not something encrypted again on the way out: a second
     // encryption would bind the bytes to an IV the row does not record.

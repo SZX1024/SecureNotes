@@ -33,6 +33,8 @@ export interface UploadedAttachment {
 
 export interface AttachmentUploadInput {
   file: File;
+  /** When the uploaded file should be removed, or null to keep it. The import keeps everything. */
+  expiresAt?: number | null;
   /** The DEK, non-extractable. */
   dek: CryptoKey;
   keyVersion: number;
@@ -118,6 +120,8 @@ export async function uploadEncryptedAttachment(input: {
   ciphertext: Bytes;
   contentIv: string;
   plaintextSize: number;
+  /** When the uploaded file should be removed, or null to keep it. */
+  expiresAt?: number | null;
   name: CryptoEnvelope;
   contentType: string;
   csrfToken: string | null;
@@ -130,6 +134,7 @@ export async function uploadEncryptedAttachment(input: {
     sizeBytes: input.ciphertext.byteLength,
     contentIv: input.contentIv,
     plaintextSizeBytes: input.plaintextSize,
+    expiresAt: input.expiresAt ?? null,
   };
 
   const form = new FormData();
@@ -154,7 +159,7 @@ export async function uploadEncryptedAttachment(input: {
 }
 
 export async function uploadAttachment(input: AttachmentUploadInput): Promise<UploadedAttachment> {
-  const { file, dek, keyVersion, attachmentId } = input;
+  const { file, dek, keyVersion, attachmentId, expiresAt = null } = input;
 
   // `Bytes` is the WebCrypto-compatible view the shared crypto helpers require.
   const bytes = new Uint8Array(await file.arrayBuffer()) as Bytes;
@@ -188,6 +193,7 @@ export async function uploadAttachment(input: AttachmentUploadInput): Promise<Up
     sizeBytes: ciphertext.byteLength,
     contentIv: iv,
     plaintextSizeBytes: plaintextSize,
+    expiresAt: expiresAt ?? null,
   };
 
   const form = new FormData();

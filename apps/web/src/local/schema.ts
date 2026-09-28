@@ -76,6 +76,13 @@ export interface LocalAttachment {
   /** The IV the cached ciphertext was produced with, needed to upload or decrypt it later. */
   contentIv: string | null;
   plaintextSizeBytes: number | null;
+  /**
+   * When this file should be removed, or null to keep it.
+   *
+   * Optional in the type because rows written before temporary attachments existed have no such field, and an
+   * attachment that predates the feature is exactly the one that must be kept.
+   */
+  expiresAt?: number | null;
   createdAt: number;
   syncedAt: number | null;
 }

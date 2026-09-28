@@ -214,6 +214,7 @@ export async function pushChange(
         plaintextSize: row.plaintextSizeBytes,
         name: row.name,
         contentType: row.contentType,
+        expiresAt: row.expiresAt ?? null,
         csrfToken: readCsrfToken(),
       });
       await db.attachments.put({ ...row, syncedAt: Date.now() });

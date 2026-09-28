@@ -51,6 +51,16 @@ export const TOMBSTONE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
  * request body limit of the platform it is uploaded to. Folders nest at most 10 deep.
  */
 export const MAX_ATTACHMENT_BYTES = 60 * 1024 * 1024;
+
+/**
+ * §9 as amended: a temporary attachment is kept for one of these, or forever.
+ *
+ * Forever is the default, because a file that disappears without having been asked to is the worse mistake of the two.
+ */
+export const ATTACHMENT_EXPIRY_CHOICES_DAYS = [7, 30] as const;
+
+/** The longest a temporary attachment may be kept: anything beyond this is a mistake, not a policy. */
+export const MAX_ATTACHMENT_RETENTION_MS = 400 * 24 * 60 * 60 * 1000;
 export const MAX_FOLDER_DEPTH = 10;
 export const MAX_TAGS_PER_NOTE = 10;
 

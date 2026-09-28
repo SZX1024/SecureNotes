@@ -1,4 +1,8 @@
-import { MAX_ATTACHMENT_BYTES, MAX_TAGS_PER_NOTE } from "@securenotes/shared";
+import {
+  MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENT_RETENTION_MS,
+  MAX_TAGS_PER_NOTE,
+} from "@securenotes/shared";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { purgeExpiredAttachments, purgeExpiredRecycleBin } from "../src/services/maintenance";
@@ -58,6 +62,7 @@ async function uploadAttachment(
     declaredSize?: number;
     contentIv?: string;
     plaintextSizeBytes?: number;
+    expiresAt?: number;
   } = {},
 ) {
   const bytes = new Uint8Array(options.bytes ?? 32).fill(7);
@@ -74,6 +79,7 @@ async function uploadAttachment(
       contentIv: options.contentIv ?? "AAAAAAAAAAAAAAAA",
       plaintextSizeBytes:
         options.plaintextSizeBytes ?? (options.declaredSize ?? bytes.byteLength) - 16,
+      ...(options.expiresAt === undefined ? {} : { expiresAt: options.expiresAt }),
     }),
   );
   form.set("blob", new File([bytes], "blob.bin", { type: "application/octet-stream" }));
@@ -257,6 +263,72 @@ describe("attachments (§9, §14)", () => {
   it("rejects an upload over the 60 MB ceiling", async () => {
     const response = await uploadAttachment("att-too-big", { bytes: MAX_ATTACHMENT_BYTES + 1 });
     expect(response.status).toBe(413);
+  });
+
+  it("keeps a temporary attachment only until its time is up (§9 as amended)", async () => {
+    const expiry = Date.now() + 60_000;
+    const uploaded = await uploadAttachment("att-temp", { expiresAt: expiry });
+    expect(uploaded.status).toBe(201);
+    // The expiry travels back, so a client can say when the file goes.
+    expect(
+      (uploaded.body as { data: { attachment: { expiresAt: number | null } } }).data.attachment
+        .expiresAt,
+    ).toBe(expiry);
+
+    // Referenced, so the sweep has to remove the reference before the row can go.
+    await createNote("att-temp-note");
+    await authedRequest("/notes/att-temp-note/attachments", jar, {
+      method: "POST",
+      body: { attachmentId: "att-temp" },
+    });
+    expect(await testEnv.ATTACHMENTS.get("attachments/att-temp")).not.toBeNull();
+
+    // A permanent attachment and one that has not expired yet are both left alone.
+    await uploadAttachment("att-keep");
+    await uploadAttachment("att-later", { expiresAt: Date.now() + 3_600_000 });
+
+    // The clock is moved rather than waited on.
+    await testEnv.DB.prepare("UPDATE attachments SET expires_at = ?1 WHERE id = 'att-temp'")
+      .bind(Date.now() - 1000)
+      .run();
+
+    const purged = await purgeExpiredAttachments(testEnv, Date.now());
+    expect(purged).toBeGreaterThanOrEqual(1);
+    expect(await testEnv.ATTACHMENTS.get("attachments/att-temp")).toBeNull();
+    expect(
+      await testEnv.DB.prepare(
+        "SELECT count(*) AS c FROM attachments WHERE id = 'att-temp'",
+      ).first<number>("c"),
+    ).toBe(0);
+    // The reference had to go first: `note_attachments` restricts the delete.
+    expect(
+      await testEnv.DB.prepare(
+        "SELECT count(*) AS c FROM note_attachments WHERE attachment_id = 'att-temp'",
+      ).first<number>("c"),
+    ).toBe(0);
+    for (const kept of ["att-keep", "att-later"]) {
+      expect(
+        await testEnv.DB.prepare("SELECT count(*) AS c FROM attachments WHERE id = ?1")
+          .bind(kept)
+          .first<number>("c"),
+      ).toBe(1);
+    }
+    // Other devices are told, exactly as they are for a deletion that was asked for.
+    expect(
+      await testEnv.DB.prepare(
+        "SELECT count(*) AS c FROM sync_changes WHERE object_id = 'att-temp' AND change_type = 'delete'",
+      ).first<number>("c"),
+    ).toBe(1);
+  });
+
+  it("refuses an expiry in the past and one beyond the ceiling", async () => {
+    const past = await uploadAttachment("att-past", { expiresAt: Date.now() - 1000 });
+    expect(past.status).toBe(400);
+    const far = await uploadAttachment("att-far", {
+      expiresAt: Date.now() + MAX_ATTACHMENT_RETENTION_MS + 1000,
+    });
+    expect(far.status).toBe(400);
+    expect(await testEnv.ATTACHMENTS.get("attachments/att-past")).toBeNull();
   });
 
   it("counts references and only enqueues deletion at zero (§9)", async () => {

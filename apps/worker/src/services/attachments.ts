@@ -1,4 +1,8 @@
-import { MAX_ATTACHMENT_BYTES, type CryptoEnvelope } from "@securenotes/shared";
+import {
+  MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENT_RETENTION_MS,
+  type CryptoEnvelope,
+} from "@securenotes/shared";
 
 import type { Env } from "../env";
 import { ApiError } from "../lib/api-error";
@@ -30,6 +34,8 @@ export interface AttachmentRow {
   plaintext_size_bytes: number | null;
   ref_count: number;
   deletion_enqueued_at: number | null;
+  /** Null for an attachment that is kept; a timestamp for one that is temporary. */
+  expires_at: number | null;
   created_at: number;
   updated_at: number;
 }
@@ -52,6 +58,7 @@ export function serializeAttachment(row: AttachmentRow) {
      * assemble the envelope and the attachment's bytes can never be decrypted by anyone — which is what a note
      * full of broken images looks like.
      */
+    expiresAt: row.expires_at,
     contentIv: row.content_iv,
     /**
      * The versions the content envelope was encrypted with.
@@ -95,6 +102,8 @@ export interface UploadInput {
   contentIv: string;
   /** Size of the plaintext the ciphertext was produced from. */
   plaintextSizeBytes: number;
+  /** When the attachment should be removed, or null to keep it. */
+  expiresAt: number | null;
   blob: ArrayBuffer;
 }
 
@@ -149,6 +158,16 @@ export async function storeAttachment(
       diagnostic: "sizeBytes does not match the uploaded bytes",
     });
   }
+  // An expiry in the past would delete the file the moment the sweep ran, and one far in the future is a policy
+  // mistake rather than a long-lived file. Both are rejected here rather than silently accepted.
+  if (input.expiresAt !== null) {
+    if (input.expiresAt <= nowMs) {
+      throw new ApiError("VALIDATION_FAILED", { diagnostic: "the expiry is in the past" });
+    }
+    if (input.expiresAt - nowMs > MAX_ATTACHMENT_RETENTION_MS) {
+      throw new ApiError("VALIDATION_FAILED", { diagnostic: "the expiry is too far away" });
+    }
+  }
 
   const existing = await findAttachment(env, userId, input.id);
   if (existing) {
@@ -164,8 +183,8 @@ export async function storeAttachment(
     await env.DB.batch([
       env.DB.prepare(
         `INSERT INTO attachments
-           (id, user_id, r2_key, name_iv, name_ciphertext, crypto_version, key_version, content_type, size_bytes, content_iv, plaintext_size_bytes, ref_count, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, ?12, ?12)`,
+           (id, user_id, r2_key, name_iv, name_ciphertext, crypto_version, key_version, content_type, size_bytes, content_iv, plaintext_size_bytes, ref_count, expires_at, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, ?12, ?13, ?13)`,
       ).bind(
         input.id,
         userId,
@@ -178,6 +197,7 @@ export async function storeAttachment(
         input.sizeBytes,
         input.contentIv,
         input.plaintextSizeBytes,
+        input.expiresAt,
         nowMs,
       ),
       syncChangeStatement(env, {
@@ -347,8 +367,12 @@ export async function listNoteAttachments(env: Env, userId: string, noteId: stri
 }
 
 /**
- * Deletes the R2 objects of attachments whose reference count reached zero, then
+ * Deletes the R2 objects of attachments that were asked for or whose time is up, then
  * their rows.
+ *
+ * Two conditions, one sweep: an attachment whose references reached zero, and one whose expiry has passed. The second
+ * deletes regardless of references, because that is what an expiry means — the note that mentions it keeps the text and
+ * loses the file, which is the honest outcome of asking for a temporary copy.
  *
  * Idempotent by construction: `R2.delete` of a missing key succeeds, and the row
  * is only removed after the object is gone, so a retry after a partial failure
@@ -361,16 +385,19 @@ export async function purgeDeletedAttachments(
 ): Promise<number> {
   const rows = await env.DB.prepare(
     `SELECT id, r2_key, user_id FROM attachments
-      WHERE ref_count = 0 AND deletion_enqueued_at IS NOT NULL
+      WHERE (ref_count = 0 AND deletion_enqueued_at IS NOT NULL)
+         OR (expires_at IS NOT NULL AND expires_at <= ?2)
       ORDER BY deletion_enqueued_at ASC LIMIT ?1`,
   )
-    .bind(batchSize)
+    .bind(batchSize, nowMs)
     .all<{ id: string; r2_key: string; user_id: string }>();
 
   let removed = 0;
   for (const row of rows.results) {
     await env.ATTACHMENTS.delete(row.r2_key);
     await env.DB.batch([
+      // Before the row: `note_attachments` references it with ON DELETE RESTRICT, so a reference would stop the delete.
+      env.DB.prepare("DELETE FROM note_attachments WHERE attachment_id = ?1").bind(row.id),
       env.DB.prepare("DELETE FROM attachments WHERE id = ?1").bind(row.id),
       syncChangeStatement(env, {
         userId: row.user_id,

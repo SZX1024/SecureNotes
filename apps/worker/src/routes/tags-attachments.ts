@@ -106,6 +106,8 @@ const metadataSchema = z
     // The content envelope (§7): without these the uploaded bytes are unreadable.
     contentIv: z.string().min(16).max(24),
     plaintextSizeBytes: z.number().int().min(1),
+    /** Absent or null keeps the attachment; a timestamp makes it temporary. */
+    expiresAt: z.number().int().positive().nullable().optional(),
   })
   .strict();
 
@@ -150,6 +152,7 @@ attachmentRoutes.post("/attachments", requireSession(), requireCsrf(), async (c)
       sizeBytes: metadata.data.sizeBytes,
       contentIv: metadata.data.contentIv,
       plaintextSizeBytes: metadata.data.plaintextSizeBytes,
+      expiresAt: metadata.data.expiresAt ?? null,
       blob: bytes,
     },
     Date.now(),

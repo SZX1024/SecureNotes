@@ -34,7 +34,12 @@ import { openAppDatabase } from "./local/migrations";
 import { KeyStore } from "./local/key-store";
 import type { SecureNotesDatabase } from "./local/schema";
 import { NoteSearchIndex, highlightSegments } from "./search";
-import { MAX_ATTACHMENT_BYTES, MAX_TAGS_PER_NOTE, type Bytes } from "@securenotes/shared";
+import {
+  ATTACHMENT_EXPIRY_CHOICES_DAYS,
+  MAX_ATTACHMENT_BYTES,
+  MAX_TAGS_PER_NOTE,
+  type Bytes,
+} from "@securenotes/shared";
 
 import {
   createLocalFolder,
@@ -234,6 +239,13 @@ export function App() {
   const retryTimer = useRef<number | null>(null);
   /** The file picker behind "Attach files", which has to be reachable with no attachment yet in the note. */
   const attachInput = useRef<HTMLInputElement | null>(null);
+  /**
+   * How long a newly attached file is kept.
+   *
+   * Kept forever unless asked otherwise: a file that disappears without having been asked to is the worse of the two
+   * mistakes, and the choice belongs next to the button that adds it rather than in a settings screen.
+   */
+  const [attachRetention, setAttachRetention] = useState<"keep" | 7 | 30>("keep");
   /** The references the note had when it was opened, for the save-time diff. */
   const [openedRefs, setOpenedRefs] = useState<string[]>([]);
   const [editorMode, setEditorMode] = useState<EditorMode>(() =>
@@ -1312,10 +1324,16 @@ export function App() {
           const filename = file.name.length > 0 ? file.name : "attachment";
           const now = Date.now();
 
+          // Computed once, at attach time: a file is temporary for a length chosen when it is added, not from when the
+          // upload happens to succeed, which may be days later on a device that was offline.
+          const expiresAt =
+            attachRetention === "keep" ? null : Date.now() + attachRetention * 24 * 60 * 60 * 1000;
+
           await db.attachments.put({
             id: attachmentId,
             r2Key: `attachments/${attachmentId}`,
             contentType: file.type.length > 0 ? file.type : "application/octet-stream",
+            expiresAt,
             sizeBytes: ciphertext.byteLength,
             name: await encryptAttachmentName(
               account.dek,
@@ -1349,16 +1367,20 @@ export function App() {
           await updateLocalNote(context, { id: noteId, title: draft.title, body });
           await enqueueAttachmentLinkChange(db, noteId);
           scheduler.current?.scheduleAfterIdle();
-          setMessage("Image encrypted and attached. It uploads with the next sync.");
+          setMessage(
+            attachRetention === "keep"
+              ? "File encrypted and attached. It uploads with the next sync."
+              : `File encrypted and attached. It will be deleted after ${attachRetention} days.`,
+          );
         } catch (error) {
           setMessage(
-            error instanceof Error ? error.message : "The image could not be attached.",
+            error instanceof Error ? error.message : "The file could not be attached.",
             "error",
           );
         }
       }
     },
-    [account, db, draft, handleRevocation, setMessage],
+    [account, db, draft, handleRevocation, attachRetention, setMessage],
   );
 
   /**
@@ -2257,6 +2279,27 @@ export function App() {
                 <button type="button" onClick={() => attachInput.current?.click()}>
                   Attach files…
                 </button>
+                <label className="field-inline">
+                  <span>Keep</span>
+                  <select
+                    aria-label="Keep attachments for"
+                    value={String(attachRetention)}
+                    onChange={(event) =>
+                      setAttachRetention(
+                        event.target.value === "keep"
+                          ? "keep"
+                          : (Number(event.target.value) as 7 | 30),
+                      )
+                    }
+                  >
+                    <option value="keep">forever</option>
+                    {ATTACHMENT_EXPIRY_CHOICES_DAYS.map((days) => (
+                      <option key={days} value={String(days)}>
+                        {days} days
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 <button type="button" className="primary" onClick={() => void saveDraft()}>
                   Save (Ctrl+S)
                 </button>
