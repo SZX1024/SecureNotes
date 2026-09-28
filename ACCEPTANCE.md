@@ -66,11 +66,11 @@ opening the file. Regenerating it is part of the gate: an item whose evidence di
 | Data lifecycle | Import is fully transactional | ✅ | `apps/web/src/export/import.test.ts:257` |
 | Data lifecycle | Export produces valid ZIP data | ✅ | `scripts/e2e/browser.spec.mjs:1108` |
 | Data lifecycle | Recovery package is separate from ordinary export | ✅ | `scripts/e2e/browser.spec.mjs:1377` |
-| Platform | PWA installs | ✅ | `scripts/e2e/browser.spec.mjs:1566` |
+| Platform | PWA installs | ✅ | `scripts/e2e/browser.spec.mjs:1586` |
 | Platform | Offline application shell works | ✅ | `apps/web/src/pwa/service-worker.test.ts:41` |
 | Platform | Service Worker does not destroy unsynced data during updates (§31 SW update) | ✅ | `apps/web/src/pwa/update-gate.test.ts:30` |
 | Platform | IndexedDB migrations preserve data (§31 database migration failure) | ✅ | `apps/web/src/local/migrations.test.ts:161` |
-| Platform | Application version is visible | ✅ | `scripts/e2e/browser.spec.mjs:1537` |
+| Platform | Application version is visible | ✅ | `scripts/e2e/browser.spec.mjs:1557` |
 | Security (§31) | XSS and stored XSS | ✅ | `apps/web/src/render/sanitize.test.ts:24` |
 | Security (§31) | CSS injection | ✅ | `apps/web/src/render/sanitize.test.ts:32` |
 | Security (§31) | CSRF | ✅ | `apps/worker/test/security.test.ts:37` |

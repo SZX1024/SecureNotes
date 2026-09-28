@@ -93,6 +93,43 @@ review before the next phase begins.
 **Why.** The specification is large and security-critical; review gates at phase boundaries
 catch direction errors while they are still cheap to fix.
 
+## ADR-007 — Attachments are arbitrary files, and may be temporary (amended 2026-09-26)
+
+**Decision.** Attachments are no longer images only. `requirements.md` §9 says "encrypted image attachments" and §12
+says images only; both are amended as follows, and the frozen text is left as it is so the amendment is visible rather
+than woven into it.
+
+1. **Any file type.** The stored bytes were never type-dependent — they are ciphertext written to R2 as
+   `application/octet-stream` — so this is a policy change and not a storage one. A reference is written as the syntax
+   that fits the file: a picture is embedded, anything else is a link.
+2. **60 MB per file.** The ceiling is one shared constant the schema, the worker and the client agree on. 60 MB is what
+   a browser can encrypt on the device without trouble and sits below the platform's request body limit; 20 MB is too
+   small for the documents and archives this is for.
+3. **A total of 5 GB per account.** A per-file ceiling does not bound a total, and a total is what means nobody has to
+   watch a bill. Exceeding it is refused with the existing `PAYLOAD_TOO_LARGE` rather than with a new error code, which
+   would change a frozen contract.
+4. **Optional expiry.** An attachment may be kept for 7 or 30 days instead of forever, chosen when it is attached. The
+   existing hourly sweep removes it: R2 object, row, references, and a sync tombstone so every device learns. Expiry is
+   stronger than references — a note that mentions an expired file keeps its text and loses the file.
+5. **No public links.** The application remains single-user. A shareable URL would add an unauthenticated endpoint and
+   change the trust boundary; it is a separate decision, not a consequence of this one.
+
+**Why.** The application is used as a temporary drop, and an image-only, 20 MB, permanent attachment is not one.
+
+**Consequences, accepted deliberately.**
+
+- `content_type` stays in plaintext in D1. §286 permits structural metadata, and the original filename remains
+  encrypted. Moving the type inside the envelope would hide it, and would change the frozen crypto format for a gain
+  this feature does not need.
+- The server sees file sizes and types, therefore, but never contents, names, or which note a file belongs to.
+- 60 MB is a real ceiling and not a stepping stone: going beyond it needs chunked encryption, which is a new AAD scheme
+  and a migration story rather than a constant.
+
+**Rejected.** Chunked encryption for hundreds of megabytes (a crypto format change, unrelated to this need);
+a streaming multipart upload (the `formData()` the route already uses holds a 60 MB blob well inside the worker's
+128 MB, so it would buy nothing); public share links (a trust-boundary change); moving `content_type` into the envelope
+(a format change with no requirement behind it).
+
 ## Open questions
 
 Tracked here until decided; none of them block P0.

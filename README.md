@@ -24,7 +24,13 @@ from your authenticator secret, and the recovery package is a file you keep.
 
 **Writing.** Markdown notes in a visual editor or in source mode, with tabs for the notes you have open, a note list
 that shows each note's opening words, folders and tags as chips, tables, task lists, code with syntax highlighting,
-LaTeX, and Mermaid diagrams. Attachments — images — are encrypted on the device before they leave it.
+LaTeX, and Mermaid diagrams. Attachments — any file, up to 60 MB — are encrypted on the device before they leave it.
+
+**A temporary drop.** An attachment can be kept for a week or a month instead of forever, chosen next to the button that
+adds it, and the hourly sweep removes it: the object, the row and the references, with every device told. A total of 5 GB
+per account is enforced before an upload is stored, and the settings dialog says how much of it is in use. Nothing is
+shared publicly: the application stays single-user, and the file type is the only thing about a file's content the
+server learns.
 
 **Not losing anything.** Everything is encrypted locally first and synced afterwards, so a note can be written, edited
 and illustrated with no network at all; the queue is durable and survives a restart. Concurrent edits become visible
@@ -211,6 +217,19 @@ repository, set the build command to `pnpm build` and the deploy command to
 build variables. This gives preview deployments per branch; it also means Cloudflare holds a token with access to your
 repository, which is the trade to weigh against the two secrets above.
 
+## Attachment limits
+
+| Limit       | Value                   | Why                                                                                                        |
+| ----------- | ----------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Per file    | 60 MB                   | What a browser can encrypt on the device without trouble, and below the request body limit of the platform |
+| Per account | 5 GB                    | A per-file ceiling does not bound a total, and a total means nobody watches a bill                         |
+| Retention   | Forever, or 7 / 30 days | Chosen when the file is attached; the hourly sweep removes what has expired                                |
+| Types       | Any                     | The object store holds ciphertext and never looks inside it                                                |
+| Sharing     | None                    | Single-user: there is no unauthenticated way to fetch a file                                               |
+
+Beyond the object store's free allowance the cost is $0.015 per GB-month, and egress is free. The three refusals an
+upload can meet are a file over 60 MB, an account over 5 GB, and a file whose expiry is in the past.
+
 ## Known limits
 
 Written down rather than left to be discovered.
@@ -224,6 +243,9 @@ Written down rather than left to be discovered.
   the browser scripts carry an evidenced fallback for it.
 - **An embedded YouTube player degrades inside the strict iframe sandbox.** The isolation is deliberate; serving those
   embeds from a separate origin is the fix, and it is not done.
+- **A temporary attachment's expiry is only visible when it is chosen.** The attachment list is derived from the note's
+  Markdown, which carries an identifier and a filename and no expiry, so a file that will disappear in three days does
+  not say so on the row. It does say so when it is attached, and the sweep does remove it.
 - **How the editor feels to write in is not something a test settles.** The document round trip, in-place formulas and
   diagrams, and images are covered.
 
