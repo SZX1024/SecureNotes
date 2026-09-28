@@ -61,6 +61,15 @@ export const ATTACHMENT_EXPIRY_CHOICES_DAYS = [7, 30] as const;
 
 /** The longest a temporary attachment may be kept: anything beyond this is a mistake, not a policy. */
 export const MAX_ATTACHMENT_RETENTION_MS = 400 * 24 * 60 * 60 * 1000;
+
+/**
+ * §9 as amended: everything a single account stores, together.
+ *
+ * A per-file ceiling does not bound a total, and the point of a total is that nobody has to watch a bill. Beyond the
+ * free allowance of the object store the cost is fractions of a cent per gigabyte, so this is a guard against the
+ * surprising case rather than a budget.
+ */
+export const MAX_ATTACHMENT_TOTAL_BYTES = 5 * 1024 * 1024 * 1024;
 export const MAX_FOLDER_DEPTH = 10;
 export const MAX_TAGS_PER_NOTE = 10;
 

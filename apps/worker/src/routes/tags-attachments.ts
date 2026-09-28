@@ -1,4 +1,4 @@
-import { MAX_TAGS_PER_NOTE } from "@securenotes/shared";
+import { MAX_ATTACHMENT_TOTAL_BYTES, MAX_TAGS_PER_NOTE } from "@securenotes/shared";
 import { Hono } from "hono";
 import { z } from "zod";
 
@@ -8,6 +8,7 @@ import { jsonOk } from "../lib/http";
 import { parseJsonBody } from "../middleware/guards";
 import { requireCsrf, requireSession } from "../middleware/session";
 import {
+  attachmentUsageBytes,
   linkAttachment,
   listNoteAttachments,
   readAttachmentBytes,
@@ -159,6 +160,18 @@ attachmentRoutes.post("/attachments", requireSession(), requireCsrf(), async (c)
   );
 
   return jsonOk({ attachment: serializeAttachment(row) }, 201);
+});
+
+/**
+ * What the account stores, and what it may store.
+ *
+ * Registered before `/attachments/:id` on purpose: the router matches in order, so `usage` would otherwise be read as an
+ * attachment identifier and answer 404.
+ */
+attachmentRoutes.get("/attachments/usage", requireSession(), async (c) => {
+  const session = c.get("session")!;
+  const usedBytes = await attachmentUsageBytes(c.env, session.userId);
+  return jsonOk({ usedBytes, limitBytes: MAX_ATTACHMENT_TOTAL_BYTES });
 });
 
 attachmentRoutes.get("/attachments/:id", requireSession(), async (c) => {

@@ -262,6 +262,8 @@ export function App() {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   /** True while the session is being restored without leaving the page. */
   const [reauthOpen, setReauthOpen] = useState(false);
+  /** What the account stores, read when the settings dialog opens rather than kept up to date in the background. */
+  const [usage, setUsage] = useState<{ usedBytes: number; limitBytes: number } | null>(null);
   /** True while the pointer is over the message, which stops the clock rather than taking it away mid-sentence. */
   const [toastPaused, setToastPaused] = useState(false);
   /**
@@ -1471,6 +1473,28 @@ export function App() {
     applyTypography(typography, document.documentElement);
   }, [typography]);
 
+  // Read when the dialog opens, and only then: a figure nobody is looking at is not worth a request on every sync.
+  useEffect(() => {
+    if (!settingsOpen) {
+      return;
+    }
+    let cancelled = false;
+    // The previous figure is kept while the new one is read: a stale number is better than a line that empties itself
+    // every time the dialog opens.
+    void apiRequest<{ usedBytes: number; limitBytes: number }>("/attachments/usage")
+      .then((data) => {
+        if (!cancelled) {
+          setUsage(data);
+        }
+      })
+      .catch(() => {
+        // A figure that cannot be read is not worth an error message; the line stays a placeholder.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [settingsOpen]);
+
   const chooseTypography = useCallback((next: Typography) => {
     setTypography(next);
     saveTypography(localStorage, next);
@@ -2534,6 +2558,7 @@ export function App() {
 
       {settingsOpen && (
         <SettingsDialog
+          usage={usage}
           theme={theme}
           onTheme={chooseTheme}
           sortKey={sortKey}

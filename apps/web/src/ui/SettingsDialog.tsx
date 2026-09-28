@@ -30,6 +30,8 @@ export interface SettingsDialogProps {
   onSortKey: (key: SortKey) => void;
   typography: Typography;
   onTypography: (typography: Typography) => void;
+  /** What the account stores, or null while it is still being read. */
+  usage: { usedBytes: number; limitBytes: number } | null;
   version: string;
   onClose: () => void;
 }
@@ -51,6 +53,7 @@ export function SettingsDialog({
   onSortKey,
   typography,
   onTypography,
+  usage,
   version,
   onClose,
 }: SettingsDialogProps) {
@@ -189,6 +192,11 @@ export function SettingsDialog({
                 ))}
               </select>
             </label>
+            <p className="muted" data-testid="storage-usage">
+              {usage === null
+                ? "Reading stored attachments…"
+                : `Storage: ${formatSize(usage.usedBytes)} of ${formatSize(usage.limitBytes)} used by encrypted attachments.`}
+            </p>
           </section>
 
           <section>
@@ -205,4 +213,12 @@ export function SettingsDialog({
       </section>
     </div>
   );
+}
+
+/** Bytes, in the units a person reads. Kept here because it is only ever used to describe storage. */
+function formatSize(bytes: number): string {
+  if (bytes >= 1024 * 1024 * 1024) {
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+  }
+  return `${Math.round(bytes / (1024 * 1024))} MB`;
 }

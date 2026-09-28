@@ -1428,6 +1428,26 @@ print(json.dumps({
     settings.slice(0, 60),
   );
 
+  // The storage figure comes from the server, so this checks three things at once: the endpoint answers, the app passes
+  // what it answered into the dialog, and the dialog renders it. None of those is visible to a unit test.
+  // The figure is a request away, so the placeholder is waited out rather than read as the answer.
+  await page
+    .waitForFunction(
+      () =>
+        !/Reading stored attachments/.test(
+          document.querySelector('[data-testid="storage-usage"]')?.textContent ?? "",
+        ),
+      undefined,
+      { timeout: 15_000 },
+    )
+    .catch(() => undefined);
+  const storage = await page.getByTestId("storage-usage").textContent();
+  check(
+    "the settings say how much storage the attachments use (§9)",
+    /Storage: .+ of .+/.test(storage ?? ""),
+    (storage ?? "").trim(),
+  );
+
   // One control per setting: the theme used to offer a selector and a cycling button for the same value.
   // Scoped to the theme's own group: the settings dialog now has a second radiogroup for the line width, and a
   // count of every radio on the page would pass or fail for reasons that have nothing to do with the theme.

@@ -1,10 +1,12 @@
 import {
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENT_RETENTION_MS,
+  MAX_ATTACHMENT_TOTAL_BYTES,
   MAX_TAGS_PER_NOTE,
 } from "@securenotes/shared";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 
+import { attachmentQuotaProblem } from "../src/services/attachments";
 import { purgeExpiredAttachments, purgeExpiredRecycleBin } from "../src/services/maintenance";
 import {
   apiDownload,
@@ -329,6 +331,63 @@ describe("attachments (§9, §14)", () => {
     });
     expect(far.status).toBe(400);
     expect(await testEnv.ATTACHMENTS.get("attachments/att-past")).toBeNull();
+  });
+
+  it("weighs an upload against what the account already stores (§9 as amended)", async () => {
+    // The boundary, as a function: filling a database to five gigabytes would test the same arithmetic slowly.
+    expect(attachmentQuotaProblem(0, MAX_ATTACHMENT_BYTES)).toBeNull();
+    expect(
+      attachmentQuotaProblem(
+        MAX_ATTACHMENT_TOTAL_BYTES - MAX_ATTACHMENT_BYTES,
+        MAX_ATTACHMENT_BYTES,
+      ),
+    ).toBeNull();
+    const problem = attachmentQuotaProblem(
+      MAX_ATTACHMENT_TOTAL_BYTES - MAX_ATTACHMENT_BYTES + 1,
+      MAX_ATTACHMENT_BYTES,
+    );
+    expect(problem).toContain("5 GB");
+  });
+
+  it("reports what the account stores, and refuses an upload that would exceed it", async () => {
+    const usage = await authedRequest<{
+      ok: true;
+      data: { usedBytes: number; limitBytes: number };
+    }>("/attachments/usage", jar);
+    expect(usage.body.data.limitBytes).toBe(MAX_ATTACHMENT_TOTAL_BYTES);
+    const before = usage.body.data.usedBytes;
+
+    // Filled directly: the point is the arithmetic against the stored total, not the transfer of five gigabytes.
+    // The account is looked up by name because this database holds every account the suite creates.
+    const userId = await testEnv.DB.prepare("SELECT id FROM users WHERE username = ?1")
+      .bind(account.username)
+      .first<string>("id");
+    const bulk = Array.from({ length: 86 }, (_, index) =>
+      testEnv.DB.prepare(
+        `INSERT INTO attachments
+           (id, user_id, r2_key, name_iv, name_ciphertext, crypto_version, key_version, content_type, size_bytes, ref_count, created_at, updated_at)
+         VALUES (?1, ?2, ?3, '', '', 1, 1, 'image/png', ?4, 0, 0, 0)`,
+      ).bind(`att-bulk-${index}`, userId, `bulk/${index}`, MAX_ATTACHMENT_BYTES),
+    );
+    await testEnv.DB.batch(bulk);
+
+    const filled = await authedRequest<{ ok: true; data: { usedBytes: number } }>(
+      "/attachments/usage",
+      jar,
+    );
+    expect(filled.body.data.usedBytes).toBe(before + 86 * MAX_ATTACHMENT_BYTES);
+
+    const refused = await uploadAttachment("att-over-quota");
+    expect(refused.status).toBe(413);
+    // The refusal happens before the object is written, so nothing is left behind to clean up.
+    expect(await testEnv.ATTACHMENTS.get("attachments/att-over-quota")).toBeNull();
+
+    await testEnv.DB.prepare("DELETE FROM attachments WHERE id LIKE 'att-bulk-%'").run();
+    const restored = await authedRequest<{ ok: true; data: { usedBytes: number } }>(
+      "/attachments/usage",
+      jar,
+    );
+    expect(restored.body.data.usedBytes).toBe(before);
   });
 
   it("counts references and only enqueues deletion at zero (§9)", async () => {

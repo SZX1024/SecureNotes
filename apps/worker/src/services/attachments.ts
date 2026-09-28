@@ -1,6 +1,7 @@
 import {
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENT_RETENTION_MS,
+  MAX_ATTACHMENT_TOTAL_BYTES,
   type CryptoEnvelope,
 } from "@securenotes/shared";
 
@@ -117,6 +118,31 @@ export interface UploadInput {
 const MEDIA_TYPE = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/i;
 
 /**
+ * Whether an upload would exceed what the account may store.
+ *
+ * Separate from the query that produces `usedBytes` so the boundary can be tested without filling a database, and
+ * separate from the caller so the message that describes it lives in one place.
+ */
+export function attachmentQuotaProblem(usedBytes: number, addingBytes: number): string | null {
+  if (usedBytes + addingBytes <= MAX_ATTACHMENT_TOTAL_BYTES) {
+    return null;
+  }
+  return `this account stores at most ${Math.round(MAX_ATTACHMENT_TOTAL_BYTES / (1024 * 1024 * 1024))} GB of attachments, and ${Math.round(
+    usedBytes / (1024 * 1024),
+  )} MB of it is in use`;
+}
+
+/** Everything the account currently stores, in bytes. */
+export async function attachmentUsageBytes(env: Env, userId: string): Promise<number> {
+  const row = await env.DB.prepare(
+    "SELECT COALESCE(SUM(size_bytes), 0) AS used FROM attachments WHERE user_id = ?1",
+  )
+    .bind(userId)
+    .first<number>("used");
+  return row ?? 0;
+}
+
+/**
  * Stores an uploaded attachment.
  *
  * The declared size and the real size must agree: the limit is only meaningful if the
@@ -172,6 +198,15 @@ export async function storeAttachment(
   const existing = await findAttachment(env, userId, input.id);
   if (existing) {
     throw new ApiError("CONFLICT", { diagnostic: "an attachment with that id already exists" });
+  }
+
+  // Checked before the object is written: a rejected upload should not cost a round trip to R2 and a delete.
+  const quotaProblem = attachmentQuotaProblem(
+    await attachmentUsageBytes(env, userId),
+    input.sizeBytes,
+  );
+  if (quotaProblem !== null) {
+    throw new ApiError("PAYLOAD_TOO_LARGE", { diagnostic: quotaProblem });
   }
 
   const r2Key = r2KeyFor(input.id);
