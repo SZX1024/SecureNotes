@@ -82,6 +82,13 @@ import {
 import { snippetOf } from "./ui/note-snippet";
 import { addTab, isDirty, loadTabs, neighbourAfterClose, removeTab, saveTabs } from "./ui/tabs";
 import { applyTypography, loadTypography, saveTypography, type Typography } from "./ui/typography";
+import {
+  DEFAULT_APP_PREFERENCES,
+  applyPreferences,
+  loadPreferences,
+  savePreferences,
+  type AppPreferences,
+} from "./ui/preferences";
 import { FolderTree, NoteOrganisation, TagList } from "./ui/Organisation";
 import { defaultEditorMode, loadEditorMode, saveEditorMode, type EditorMode } from "./editor/mode";
 import {
@@ -239,24 +246,36 @@ export function App() {
   const retryTimer = useRef<number | null>(null);
   /** The file picker behind "Attach files", which has to be reachable with no attachment yet in the note. */
   const attachInput = useRef<HTMLInputElement | null>(null);
+  const [preferences, setPreferences] = useState<AppPreferences>(() =>
+    typeof localStorage === "undefined" ? DEFAULT_APP_PREFERENCES : loadPreferences(localStorage),
+  );
   /**
    * How long a newly attached file is kept.
    *
-   * Kept forever unless asked otherwise: a file that disappears without having been asked to is the worse of the two
-   * mistakes, and the choice belongs next to the button that adds it rather than in a settings screen.
+   * Defaults to user preference or kept forever unless asked otherwise.
    */
-  const [attachRetention, setAttachRetention] = useState<"keep" | 7 | 30>("keep");
+  const [attachRetention, setAttachRetention] = useState<"keep" | 7 | 30>(
+    () =>
+      (typeof localStorage === "undefined"
+        ? DEFAULT_APP_PREFERENCES
+        : loadPreferences(localStorage)
+      ).defaultAttachmentRetention,
+  );
   /** The references the note had when it was opened, for the save-time diff. */
   const [openedRefs, setOpenedRefs] = useState<string[]>([]);
-  const [editorMode, setEditorMode] = useState<EditorMode>(() =>
-    defaultEditorMode(
+  const [editorMode, setEditorMode] = useState<EditorMode>(() => {
+    const prefs =
+      typeof localStorage === "undefined" ? DEFAULT_APP_PREFERENCES : loadPreferences(localStorage);
+    return defaultEditorMode(
       typeof window === "undefined" ? 1024 : window.innerWidth,
       typeof window !== "undefined" && typeof window.matchMedia === "function"
         ? window.matchMedia("(pointer: coarse)").matches
         : false,
-      typeof localStorage === "undefined" ? null : loadEditorMode(localStorage),
-    ),
-  );
+      typeof localStorage === "undefined"
+        ? prefs.defaultEditorMode
+        : (loadEditorMode(localStorage) ?? prefs.defaultEditorMode),
+    );
+  });
   const [toast, setToast] = useState<Toast | null>(null);
   /** The open right-click menu, if any. One at a time, owned by whatever opened it. */
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
@@ -595,7 +614,7 @@ export function App() {
       return;
     }
 
-    const instance = new SyncScheduler({ run: runSyncPass });
+    const instance = new SyncScheduler({ run: runSyncPass, delayMs: preferences.syncDelayMs });
     scheduler.current = instance;
     const detach = attachSyncTriggers(instance);
     // Startup pass; the browser reports network recovery through the same scheduler.
@@ -614,7 +633,7 @@ export function App() {
       }
       scheduler.current = null;
     };
-  }, [screen, db, account, runSyncPass]);
+  }, [screen, db, account, runSyncPass, preferences.syncDelayMs]);
 
   // App Lock: check on an interval so a tab left open locks itself (§7).
   useEffect(() => {
@@ -1519,6 +1538,10 @@ export function App() {
     applyTypography(typography, document.documentElement);
   }, [typography]);
 
+  useEffect(() => {
+    applyPreferences(preferences, document.documentElement);
+  }, [preferences]);
+
   // Read when the dialog opens, and only then: a figure nobody is looking at is not worth a request on every sync.
   useEffect(() => {
     if (!settingsOpen) {
@@ -1544,6 +1567,16 @@ export function App() {
   const chooseTypography = useCallback((next: Typography) => {
     setTypography(next);
     saveTypography(localStorage, next);
+  }, []);
+
+  const choosePreferences = useCallback((next: AppPreferences) => {
+    setPreferences(next);
+    savePreferences(localStorage, next);
+    applyPreferences(next, document.documentElement);
+    setAttachRetention(next.defaultAttachmentRetention);
+    if (scheduler.current) {
+      scheduler.current.setDelay(next.syncDelayMs);
+    }
   }, []);
 
   // The clock on a message that dismisses itself. Tracked so it is cleared on unmount — a timer that outlives the
@@ -2624,6 +2657,8 @@ export function App() {
           onSortKey={setSortKey}
           typography={typography}
           onTypography={chooseTypography}
+          preferences={preferences}
+          onPreferences={choosePreferences}
           version={__APP_VERSION__}
           onClose={() => setSettingsOpen(false)}
         />

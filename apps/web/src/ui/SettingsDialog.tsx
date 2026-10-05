@@ -2,12 +2,24 @@ import { useEffect } from "react";
 
 import { SORT_KEYS, SORT_LABELS, type SortKey } from "./sort";
 import {
+  EDITOR_PADDINGS,
   EDITOR_WIDTHS,
   INTERFACE_SIZES,
   LINE_HEIGHTS,
+  NOTE_FONT_FAMILIES,
   NOTE_SIZES,
+  type NoteFontFamily,
   type Typography,
 } from "./typography";
+import {
+  ATTACHMENT_RETENTION_CHOICES,
+  DEFAULT_EDITOR_MODE_CHOICES,
+  SYNC_DELAY_CHOICES,
+  type AppPreferences,
+  type AttachmentRetentionChoice,
+  type DefaultEditorMode,
+  type SyncDelayChoice,
+} from "./preferences";
 import { Icon } from "./Icon";
 import type { ThemePreference } from "../theme";
 
@@ -15,12 +27,7 @@ import type { ThemePreference } from "../theme";
  * Settings (§22).
  *
  * Everything that is about the application rather than about the note being written, in one place that is opened
- * deliberately and closed again: appearance, how notes are ordered, and what the thing is. The sidebar keeps the
- * work.
- *
- * Each setting has exactly one control. The previous interface offered the theme twice — a three-way selector and a
- * button that cycled the same setting — which is the kind of duplication that makes a person wonder whether the two
- * are different.
+ * deliberately and closed again: appearance, typography & padding, editor preferences, note order, and about info.
  */
 
 export interface SettingsDialogProps {
@@ -30,6 +37,8 @@ export interface SettingsDialogProps {
   onSortKey: (key: SortKey) => void;
   typography: Typography;
   onTypography: (typography: Typography) => void;
+  preferences: AppPreferences;
+  onPreferences: (preferences: AppPreferences) => void;
   /** What the account stores, or null while it is still being read. */
   usage: { usedBytes: number; limitBytes: number } | null;
   version: string;
@@ -53,6 +62,8 @@ export function SettingsDialog({
   onSortKey,
   typography,
   onTypography,
+  preferences,
+  onPreferences,
   usage,
   version,
   onClose,
@@ -106,7 +117,7 @@ export function SettingsDialog({
           </section>
 
           <section>
-            <h3>Typography</h3>
+            <h3>Typography & Layout</h3>
             <div className="settings-grid">
               <label className="field">
                 <span>Interface size</span>
@@ -158,23 +169,150 @@ export function SettingsDialog({
                   ))}
                 </select>
               </label>
+
+              <label className="field">
+                <span>Font family</span>
+                <select
+                  aria-label="Font family"
+                  value={typography.fontFamily}
+                  onChange={(event) =>
+                    onTypography({
+                      ...typography,
+                      fontFamily: event.target.value as NoteFontFamily,
+                    })
+                  }
+                >
+                  {NOTE_FONT_FAMILIES.map((fam) => (
+                    <option key={fam.value} value={fam.value}>
+                      {fam.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
             </div>
 
-            <div className="segmented" role="radiogroup" aria-label="Line width">
-              {EDITOR_WIDTHS.map((choice) => (
-                <button
-                  key={choice.value}
-                  type="button"
-                  role="radio"
-                  aria-checked={typography.editorWidth === choice.value}
-                  className={typography.editorWidth === choice.value ? "selected" : undefined}
-                  onClick={() => onTypography({ ...typography, editorWidth: choice.value })}
-                >
-                  {choice.label}
-                </button>
-              ))}
+            <div className="field" style={{ marginBottom: "var(--space-4)" }}>
+              <span>Content padding</span>
+              <div className="segmented" role="radiogroup" aria-label="Content padding">
+                {EDITOR_PADDINGS.map((choice) => (
+                  <button
+                    key={choice.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={typography.editorPadding === choice.value}
+                    className={typography.editorPadding === choice.value ? "selected" : undefined}
+                    onClick={() => onTypography({ ...typography, editorPadding: choice.value })}
+                  >
+                    {choice.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="field">
+              <span>Line width</span>
+              <div className="segmented" role="radiogroup" aria-label="Line width">
+                {EDITOR_WIDTHS.map((choice) => (
+                  <button
+                    key={choice.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={typography.editorWidth === choice.value}
+                    className={typography.editorWidth === choice.value ? "selected" : undefined}
+                    onClick={() => onTypography({ ...typography, editorWidth: choice.value })}
+                  >
+                    {choice.label}
+                  </button>
+                ))}
+              </div>
             </div>
             <p className="muted">Sizes apply immediately and are remembered on this device.</p>
+          </section>
+
+          <section>
+            <h3>Editor & Sync</h3>
+            <div className="settings-grid">
+              <label className="field">
+                <span>Default editor</span>
+                <select
+                  aria-label="Default editor mode"
+                  value={preferences.defaultEditorMode}
+                  onChange={(event) =>
+                    onPreferences({
+                      ...preferences,
+                      defaultEditorMode: event.target.value as DefaultEditorMode,
+                    })
+                  }
+                >
+                  {DEFAULT_EDITOR_MODE_CHOICES.map((choice) => (
+                    <option key={choice.value} value={choice.value}>
+                      {choice.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="field">
+                <span>Auto-sync delay</span>
+                <select
+                  aria-label="Auto-sync delay"
+                  value={preferences.syncDelayMs}
+                  onChange={(event) =>
+                    onPreferences({
+                      ...preferences,
+                      syncDelayMs: Number(event.target.value) as SyncDelayChoice,
+                    })
+                  }
+                >
+                  {SYNC_DELAY_CHOICES.map((choice) => (
+                    <option key={choice.value} value={choice.value}>
+                      {choice.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="field">
+                <span>Default attachment retention</span>
+                <select
+                  aria-label="Default attachment retention"
+                  value={preferences.defaultAttachmentRetention}
+                  onChange={(event) => {
+                    const raw = event.target.value;
+                    const val: AttachmentRetentionChoice =
+                      raw === "keep" ? "keep" : (Number(raw) as 7 | 30);
+                    onPreferences({
+                      ...preferences,
+                      defaultAttachmentRetention: val,
+                    });
+                  }}
+                >
+                  {ATTACHMENT_RETENTION_CHOICES.map((choice) => (
+                    <option key={String(choice.value)} value={choice.value}>
+                      {choice.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label
+                className="field checkbox"
+                style={{ alignSelf: "end", paddingBottom: "0.5rem" }}
+              >
+                <input
+                  type="checkbox"
+                  aria-label="Show line numbers in source mode"
+                  checked={preferences.showLineNumbers}
+                  onChange={(event) =>
+                    onPreferences({
+                      ...preferences,
+                      showLineNumbers: event.target.checked,
+                    })
+                  }
+                />
+                <span>Show line numbers</span>
+              </label>
+            </div>
           </section>
 
           <section>

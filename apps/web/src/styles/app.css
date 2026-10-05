@@ -182,6 +182,8 @@ mark.hit {
 .note-title {
   font-size: 1.25rem;
   font-weight: 600;
+  padding: 0.5rem var(--note-padding, 1.5rem);
+  font-family: var(--font-note-family, inherit);
 }
 
 .note-body {
@@ -334,10 +336,11 @@ textarea:focus {
 .preview {
   flex: 1;
   min-height: 0;
-  padding: 0.25rem 0;
+  padding: 1rem var(--note-padding, 1.5rem);
   overflow: auto;
   border: 1px solid var(--border);
   border-radius: 0.4rem;
+  font-family: var(--font-note-family, inherit);
 }
 
 .preview table {
@@ -380,8 +383,9 @@ textarea:focus {
 .wysiwyg-editor {
   flex: 1;
   min-height: 0;
-  padding: 0.5rem;
+  padding: 1rem var(--note-padding, 1.5rem);
   overflow: auto;
+  font-family: var(--font-note-family, inherit);
 }
 
 .wysiwyg-editor .ProseMirror {
@@ -1147,20 +1151,28 @@ button.status-item:hover:not(:disabled) {
   border-color: var(--border-strong);
 }
 
+:root[data-line-numbers="false"] .source-editor .cm-gutters {
+  display: none !important;
+}
+
 /* Typography (§22): the sizes the settings dialog chooses. Both fall back to the interface's own values so the
    editor looks right before anything has been chosen. */
 .source-editor .cm-content {
   font-size: var(--font-note-size, 16px);
   line-height: var(--line-prose);
+  padding: 0.75rem var(--note-padding, 1.5rem) !important;
+  font-family: var(--font-note-family, ui-monospace, monospace);
 }
 
 .wysiwyg-editor .ProseMirror,
 .preview {
   font-size: var(--font-note-size, 16px);
   line-height: var(--line-prose);
+  font-family: var(--font-note-family, inherit);
 }
 
 /* A comfortable measure for reading and writing, centred in the pane it is given. */
+:root[data-editor-width="comfortable"] .note-title,
 :root[data-editor-width="comfortable"] .source-editor .cm-content,
 :root[data-editor-width="comfortable"] .wysiwyg-editor .ProseMirror,
 :root[data-editor-width="comfortable"] .preview {

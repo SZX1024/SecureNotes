@@ -22,7 +22,7 @@ export interface SchedulerOptions {
 
 export class SyncScheduler {
   readonly #run: () => Promise<void>;
-  readonly #delayMs: number;
+  #delayMs: number;
   readonly #setTimeout: (handler: () => void, timeout: number) => unknown;
   readonly #clearTimeout: (handle: unknown) => void;
 
@@ -36,6 +36,11 @@ export class SyncScheduler {
     this.#delayMs = options.delayMs ?? IDLE_SYNC_DELAY_MS;
     this.#setTimeout = options.setTimeoutFn ?? ((handler, timeout) => setTimeout(handler, timeout));
     this.#clearTimeout = options.clearTimeoutFn ?? ((handle) => clearTimeout(handle as never));
+  }
+
+  /** Updates the idle delay for subsequent scheduled passes. */
+  setDelay(delayMs: number): void {
+    this.#delayMs = delayMs;
   }
 
   /** True while a pass is in flight. */

@@ -12,6 +12,8 @@
  */
 
 export type EditorWidth = "full" | "comfortable";
+export type EditorPadding = "compact" | "standard" | "spacious";
+export type NoteFontFamily = "sans" | "serif" | "mono";
 
 export interface Typography {
   /** The interface's own size, in pixels. */
@@ -22,6 +24,10 @@ export interface Typography {
   lineHeight: number;
   /** How wide a line of prose is allowed to run. */
   editorWidth: EditorWidth;
+  /** Content padding / margins for editor and preview. */
+  editorPadding: EditorPadding;
+  /** Font family for note text. */
+  fontFamily: NoteFontFamily;
 }
 
 export const TYPOGRAPHY_STORAGE_KEY = "securenotes.typography";
@@ -33,12 +39,37 @@ export const EDITOR_WIDTHS: ReadonlyArray<{ value: EditorWidth; label: string }>
   { value: "full", label: "Full width" },
   { value: "comfortable", label: "Comfortable" },
 ];
+export const EDITOR_PADDINGS: ReadonlyArray<{ value: EditorPadding; label: string }> = [
+  { value: "compact", label: "Compact" },
+  { value: "standard", label: "Standard" },
+  { value: "spacious", label: "Spacious" },
+];
+export const NOTE_FONT_FAMILIES: ReadonlyArray<{ value: NoteFontFamily; label: string }> = [
+  { value: "sans", label: "Sans-serif" },
+  { value: "serif", label: "Serif" },
+  { value: "mono", label: "Monospace" },
+];
 
 export const DEFAULT_TYPOGRAPHY: Typography = {
   interfaceSize: 13,
   noteSize: 16,
   lineHeight: 1.7,
   editorWidth: "full",
+  editorPadding: "standard",
+  fontFamily: "sans",
+};
+
+const PADDING_VALUES: Record<EditorPadding, string> = {
+  compact: "0.75rem",
+  standard: "1.5rem",
+  spacious: "2.5rem",
+};
+
+const FONT_FAMILY_STACKS: Record<NoteFontFamily, string> = {
+  sans: 'system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
+  serif:
+    'Charter, "Bitstream Charter", "Sitka Text", Cambria, Georgia, "Times New Roman", STSong, "Songti SC", serif',
+  mono: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
 };
 
 export interface TypographyStorage {
@@ -93,6 +124,18 @@ export function parseTypography(raw: string | null): Typography {
       candidate.editorWidth === "comfortable" || candidate.editorWidth === "full"
         ? candidate.editorWidth
         : DEFAULT_TYPOGRAPHY.editorWidth,
+    editorPadding:
+      candidate.editorPadding === "compact" ||
+      candidate.editorPadding === "standard" ||
+      candidate.editorPadding === "spacious"
+        ? candidate.editorPadding
+        : DEFAULT_TYPOGRAPHY.editorPadding,
+    fontFamily:
+      candidate.fontFamily === "sans" ||
+      candidate.fontFamily === "serif" ||
+      candidate.fontFamily === "mono"
+        ? candidate.fontFamily
+        : DEFAULT_TYPOGRAPHY.fontFamily,
   };
 }
 
@@ -117,6 +160,8 @@ export function typographyStyle(typography: Typography): Record<string, string> 
     "--text-xs": `${typography.interfaceSize - 2}px`,
     "--font-note-size": `${typography.noteSize}px`,
     "--line-prose": String(typography.lineHeight),
+    "--note-padding": PADDING_VALUES[typography.editorPadding] ?? PADDING_VALUES.standard,
+    "--font-note-family": FONT_FAMILY_STACKS[typography.fontFamily] ?? FONT_FAMILY_STACKS.sans,
   };
 }
 
@@ -131,4 +176,5 @@ export function applyTypography(typography: Typography, root: TypographyRoot): v
     root.style.setProperty(name, value);
   }
   root.dataset["editorWidth"] = typography.editorWidth;
+  root.dataset["editorPadding"] = typography.editorPadding;
 }
