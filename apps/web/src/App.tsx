@@ -1382,7 +1382,7 @@ export function App() {
         }
       }
     },
-    [account, db, draft, handleRevocation, attachRetention, setMessage],
+    [account, db, draft, attachRetention, setMessage],
   );
 
   /**

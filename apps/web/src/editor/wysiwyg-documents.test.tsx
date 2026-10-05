@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { render, waitFor } from "@testing-library/react";
 import { beforeAll, describe, expect, it } from "vitest";
 
@@ -75,7 +75,13 @@ describe("notes that must open in the visual editor", () => {
   });
 
   it("opens the full feature document without logging an error", async () => {
-    const document = readFileSync("../../.sandbox-home/test-doc.md", "utf8");
+    const documentPath = ["../../scripts/test-document.md", "scripts/test-document.md"].find(
+      (path) => existsSync(path),
+    );
+    if (!documentPath) {
+      throw new Error("Could not find scripts/test-document.md");
+    }
+    const document = readFileSync(documentPath, "utf8");
 
     const { container, errors, unmount } = await mount(document);
 
