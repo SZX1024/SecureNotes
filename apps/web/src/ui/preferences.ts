@@ -17,7 +17,7 @@ export interface AppPreferences {
 }
 
 export const DEFAULT_APP_PREFERENCES: AppPreferences = {
-  defaultEditorMode: "wysiwyg",
+  defaultEditorMode: "source",
   showLineNumbers: true,
   defaultAttachmentRetention: "keep",
   syncDelayMs: 5000,

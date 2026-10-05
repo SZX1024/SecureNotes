@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { inlineRenderPlugin } from "./inline-render";
 import { missingTitleFix } from "./missing-titles";
 import { attachmentIdFromUrl } from "../data/attachment-content";
+import { ATTACHMENT_URL_PREFIX } from "./attachments";
 
 /**
  * WYSIWYG mode (§12).
@@ -79,13 +80,20 @@ export function WysiwygEditor({
     let frame = 0;
     const apply = () => {
       for (const image of element.querySelectorAll<HTMLImageElement>("img[src]")) {
-        const id = attachmentIdFromUrl(image.getAttribute("src") ?? "");
+        const currentSrc = image.getAttribute("src") ?? "";
+        const id = attachmentIdFromUrl(image.getAttribute("data-attachment-src") ?? currentSrc);
         if (id === null) {
           continue;
         }
         const resolved = urlForAttachment(id);
-        if (resolved !== null && image.getAttribute("src") !== resolved) {
+        if (resolved !== null && currentSrc !== resolved) {
           image.setAttribute("src", resolved);
+        } else if (resolved === null && currentSrc.startsWith(ATTACHMENT_URL_PREFIX)) {
+          image.setAttribute("data-attachment-src", currentSrc);
+          image.setAttribute(
+            "src",
+            "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E",
+          );
         }
       }
       // A file that is not a picture is referenced as a link, and its target is the same ciphertext endpoint. It is

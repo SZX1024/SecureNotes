@@ -272,19 +272,15 @@ export function App() {
   );
   /** The references the note had when it was opened, for the save-time diff. */
   const [openedRefs, setOpenedRefs] = useState<string[]>([]);
-  const [editorMode, setEditorMode] = useState<EditorMode>(() => {
-    const prefs =
-      typeof localStorage === "undefined" ? DEFAULT_APP_PREFERENCES : loadPreferences(localStorage);
-    return defaultEditorMode(
+  const [editorMode, setEditorMode] = useState<EditorMode>(() =>
+    defaultEditorMode(
       typeof window === "undefined" ? 1024 : window.innerWidth,
       typeof window !== "undefined" && typeof window.matchMedia === "function"
         ? window.matchMedia("(pointer: coarse)").matches
         : false,
-      typeof localStorage === "undefined"
-        ? prefs.defaultEditorMode
-        : (loadEditorMode(localStorage) ?? prefs.defaultEditorMode),
-    );
-  });
+      typeof localStorage === "undefined" ? null : loadEditorMode(localStorage),
+    ),
+  );
   const [toast, setToast] = useState<Toast | null>(null);
   /** The open right-click menu, if any. One at a time, owned by whatever opened it. */
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
@@ -310,8 +306,6 @@ export function App() {
   const [outlineOpen, setOutlineOpen] = useState(false);
   /** State for Image Lightbox */
   const [lightboxImage, setLightboxImage] = useState<{ src: string; alt: string } | null>(null);
-  /** State for unmasked sensitive notes */
-  const [unmaskedNoteIds, setUnmaskedNoteIds] = useState<Set<string>>(new Set());
   /** Ref to the editor host container for floating toolbar tracking */
   const editorHostRef = useRef<HTMLDivElement | null>(null);
   /**
@@ -1598,6 +1592,8 @@ export function App() {
     savePreferences(localStorage, next);
     applyPreferences(next, document.documentElement);
     setAttachRetention(next.defaultAttachmentRetention);
+    saveEditorMode(localStorage, next.defaultEditorMode);
+    setEditorMode(next.defaultEditorMode);
     if (scheduler.current) {
       scheduler.current.setDelay(next.syncDelayMs);
     }
@@ -1703,9 +1699,19 @@ export function App() {
         },
         {
           id: "print-note",
-          label: "Print note / Save PDF…",
+          label: "Print note / Export PDF…",
           disabled: draft === null,
-          onSelect: () => printNote(),
+          onSelect: () => {
+            if (!draft) return;
+            void loadRender().then(({ renderMarkdown }) => {
+              const html = renderMarkdown(draft.body);
+              const rewritten = rewriteAttachmentUrls(
+                transformWikiLinksToHtml(html),
+                (id) => attachmentUrls?.get(id) ?? null,
+              );
+              printNote(draft.title, rewritten);
+            });
+          },
         },
         { id: "sep-3", label: "", separator: true, onSelect: () => undefined },
         {
@@ -2122,7 +2128,18 @@ export function App() {
   }
 
   return (
-    <div className="app">
+    <div className={`app ${zenMode ? "zen-mode" : ""}`}>
+      {zenMode && (
+        <button
+          type="button"
+          className="zen-exit-btn"
+          onClick={() => setZenMode(false)}
+          title="Exit Focus Mode (Esc)"
+        >
+          <Icon name="remove" size={14} />
+          <span>Exit Focus</span>
+        </button>
+      )}
       <MenuBar
         menus={menus}
         appName="SecureNotes"
@@ -2299,42 +2316,7 @@ export function App() {
               >
                 <button type="button" onClick={() => openNote(note.id)}>
                   <span className="row-head">
-                    <span className="title">
-                      {(() => {
-                        const isSensitive =
-                          note.title.toLowerCase().includes("[private]") ||
-                          (tagLinks.get(note.id) ?? []).some(
-                            (tid) =>
-                              tagList.find((t) => t.id === tid)?.name.toLowerCase() === "private",
-                          );
-                        const isMasked = isSensitive && !unmaskedNoteIds.has(note.id);
-                        if (isMasked) {
-                          return (
-                            <span
-                              style={{
-                                display: "inline-flex",
-                                alignItems: "center",
-                                gap: "0.25rem",
-                              }}
-                            >
-                              <span style={{ letterSpacing: "2px" }}>••••••••</span>
-                              <span
-                                role="button"
-                                title="Click to reveal title"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setUnmaskedNoteIds((prev) => new Set([...prev, note.id]));
-                                }}
-                                style={{ fontSize: "0.75rem", opacity: 0.6 }}
-                              >
-                                👁️
-                              </span>
-                            </span>
-                          );
-                        }
-                        return renderHighlighted(note.title, query);
-                      })()}
-                    </span>
+                    <span className="title">{renderHighlighted(note.title, query)}</span>
                     {note.pinned && <span title="Pinned">📌</span>}
                     <span className="muted">{new Date(note.updatedAt).toLocaleDateString()}</span>
                   </span>
@@ -2380,42 +2362,12 @@ export function App() {
           />
           {draft ? (
             <>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "0.5rem",
-                  flexWrap: "wrap",
-                  marginBottom: "0.5rem",
-                }}
-              >
-                <input
-                  className="note-title"
-                  style={{ flex: 1, minWidth: "10rem" }}
-                  value={draft.title}
-                  aria-label="Note title"
-                  onChange={(event) => setDraft({ ...draft, title: event.target.value })}
-                />
-                <span className="note-stats-bar" title="Word count and estimated reading time">
-                  {countNoteStats(draft.body).label}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setOutlineOpen((o) => !o)}
-                  title="Table of Contents / Outline"
-                  style={{ padding: "0.25rem 0.5rem", fontSize: "0.8rem", width: "auto" }}
-                >
-                  Outline
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setZenMode((z) => !z)}
-                  title="Focus / Zen mode (F11)"
-                  style={{ padding: "0.25rem 0.5rem", fontSize: "0.8rem", width: "auto" }}
-                >
-                  {zenMode ? "Exit Focus" : "Focus"}
-                </button>
-              </div>
+              <input
+                className="note-title"
+                value={draft.title}
+                aria-label="Note title"
+                onChange={(event) => setDraft({ ...draft, title: event.target.value })}
+              />
 
               {outlineOpen && (
                 <OutlineDrawer
@@ -2464,6 +2416,16 @@ export function App() {
                       });
                     }
                   }}
+                  backlinks={computeBacklinks(
+                    notes.map((n) => ({
+                      id: n.note.id,
+                      title: n.document.title,
+                      body: n.document.body,
+                    })),
+                    draft.id,
+                    draft.title,
+                  )}
+                  onOpenNote={openNote}
                 />
               ) : (
                 <div
@@ -2543,38 +2505,6 @@ export function App() {
                   });
                 }}
               />
-
-              {(() => {
-                const backlinks = draft
-                  ? computeBacklinks(
-                      notes.map((n) => ({
-                        id: n.note.id,
-                        title: n.document.title,
-                        body: n.document.body,
-                      })),
-                      draft.id,
-                      draft.title,
-                    )
-                  : [];
-                if (backlinks.length === 0) return null;
-                return (
-                  <section className="backlinks-section" aria-label="Linked references">
-                    <h3>Linked References ({backlinks.length})</h3>
-                    <ul className="backlinks-list">
-                      {backlinks.map((b) => (
-                        <li
-                          key={b.sourceNoteId}
-                          className="backlink-item"
-                          onClick={() => openNote(b.sourceNoteId)}
-                        >
-                          <div className="backlink-title">{b.sourceNoteTitle}</div>
-                          <div className="backlink-snippet">{b.snippet}</div>
-                        </li>
-                      ))}
-                    </ul>
-                  </section>
-                );
-              })()}
 
               {draftAttachments.length > 0 && (
                 <section className="attachments" aria-label="Attachments">
@@ -2688,6 +2618,23 @@ export function App() {
                 >
                   {editorMode === "wysiwyg" ? "Markdown source" : "WYSIWYG"}
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setOutlineOpen((o) => !o)}
+                  title="Table of Contents / Outline"
+                >
+                  Outline
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setZenMode((z) => !z)}
+                  title="Focus / Zen mode (F11)"
+                >
+                  {zenMode ? "Exit Focus" : "Focus"}
+                </button>
+                <span className="note-stats-bar" title="Word count and estimated reading time">
+                  {countNoteStats(draft.body).label}
+                </span>
                 <span className="muted">
                   {preview
                     ? "Rendered through the sanitizer."
@@ -3200,6 +3147,8 @@ function MarkdownPreview({
   onOpenPdf,
   onOpenImage,
   onOpenWikiLink,
+  backlinks,
+  onOpenNote,
 }: {
   title: string;
   body: string;
@@ -3208,6 +3157,8 @@ function MarkdownPreview({
   onOpenPdf?: (attachmentId: string, filename: string) => void;
   onOpenImage?: (src: string, alt: string) => void;
   onOpenWikiLink?: (targetTitle: string) => void;
+  backlinks?: Array<{ sourceNoteId: string; sourceNoteTitle: string; snippet: string }>;
+  onOpenNote?: (id: string) => void;
 }) {
   const container = useRef<HTMLDivElement>(null);
   const [html, setHtml] = useState<string | null>(null);
@@ -3293,11 +3244,26 @@ function MarkdownPreview({
   // §12: the sanitizer ran inside `renderMarkdown`, so this HTML is safe. The attachment addresses are then
   // replaced with blob URLs: the endpoint serves ciphertext, so an <img> pointing at it is a broken image.
   return (
-    <div
-      className="preview"
-      ref={container}
-      dangerouslySetInnerHTML={{ __html: rewriteAttachmentUrls(html, urlForAttachment) }}
-    />
+    <div className="preview" ref={container}>
+      <div dangerouslySetInnerHTML={{ __html: rewriteAttachmentUrls(html, urlForAttachment) }} />
+      {backlinks && backlinks.length > 0 && (
+        <section className="backlinks-section" aria-label="Linked references">
+          <h3>Linked References ({backlinks.length})</h3>
+          <ul className="backlinks-list">
+            {backlinks.map((b) => (
+              <li
+                key={b.sourceNoteId}
+                className="backlink-item"
+                onClick={() => onOpenNote?.(b.sourceNoteId)}
+              >
+                <div className="backlink-title">{b.sourceNoteTitle}</div>
+                <div className="backlink-snippet">{b.snippet}</div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+    </div>
   );
 }
 
@@ -3522,7 +3488,7 @@ function LoginScreen({
   const [code, setCode] = useState("");
   const [recoveryCode, setRecoveryCode] = useState("");
   const [useRecoveryCode, setUseRecoveryCode] = useState(false);
-  const [rememberDevice, setRememberDevice] = useState(false);
+  const [rememberDevice, setRememberDevice] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 

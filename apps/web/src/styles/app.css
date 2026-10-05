@@ -1747,35 +1747,14 @@ pre:hover .code-copy-btn {
 
 /* Print layout optimizations */
 @media print {
-  .rail,
-  .pane.folders,
-  .pane.list,
-  .tab-strip,
-  header,
-  footer,
+  .app,
   .menu-bar,
   .status-bar,
-  .segmented,
-  button,
-  .attachments,
-  .floating-format-toolbar,
-  .outline-drawer,
-  .privacy-shield-overlay {
-    display: none !important;
-  }
-
   .shell,
-  .pane.editor,
-  .editor-host,
-  .preview {
-    display: block !important;
-    width: 100% !important;
-    max-width: 100% !important;
-    border: none !important;
-    padding: 0 !important;
-    margin: 0 !important;
-    background: #ffffff !important;
-    color: #000000 !important;
+  .rail,
+  .side-panel,
+  .pane {
+    display: none !important;
   }
 }
 
@@ -1999,18 +1978,59 @@ pre:hover .code-copy-btn {
 }
 
 /* Zen / Focus mode */
+.app.zen-mode .menu-bar,
+.app.zen-mode .status-bar {
+  display: none !important;
+}
+
 .shell.zen-mode {
   grid-template-columns: 1fr !important;
+  height: 100vh !important;
+  max-height: 100vh !important;
 }
 
 .shell.zen-mode .rail,
+.shell.zen-mode .side-panel,
+.shell.zen-mode .pane.side-panel,
 .shell.zen-mode .pane.folders,
 .shell.zen-mode .pane.list {
   display: none !important;
 }
 
 .shell.zen-mode .pane.editor {
-  border-left: none;
+  border-left: none !important;
+  border-right: none !important;
+  max-width: 54rem;
+  margin-inline: auto;
+  width: 100%;
+}
+
+.zen-exit-btn {
+  position: fixed;
+  top: 1rem;
+  right: 1.5rem;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.75rem !important;
+  font-size: var(--text-xs) !important;
+  color: var(--muted);
+  background: var(--bg-elevated) !important;
+  border: 1px solid var(--border-strong) !important;
+  border-radius: 1rem !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  cursor: pointer;
+  opacity: 0.7;
+  transition:
+    opacity 0.2s,
+    color 0.2s;
+}
+
+.zen-exit-btn:hover {
+  color: var(--text);
+  background: var(--bg-hover) !important;
+  opacity: 1;
 }
 
 /* WikiLinks style */

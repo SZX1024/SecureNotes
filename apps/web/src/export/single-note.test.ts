@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { exportNoteAsMarkdown, exportNoteAsHtml } from "./single-note";
+import { exportNoteAsMarkdown, exportNoteAsHtml, printNote } from "./single-note";
 
 describe("single note export", () => {
   beforeEach(() => {
@@ -22,5 +22,9 @@ describe("single note export", () => {
 
     exportNoteAsHtml("Meeting Notes", "<p>Discussed roadmap</p>");
     expect(createObjectURL).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls print without throwing", () => {
+    expect(() => printNote("Print Title", "<p>Print body</p>")).not.toThrow();
   });
 });
