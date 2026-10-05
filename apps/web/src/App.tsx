@@ -3232,7 +3232,7 @@ function LoginScreen({
   const [code, setCode] = useState("");
   const [recoveryCode, setRecoveryCode] = useState("");
   const [useRecoveryCode, setUseRecoveryCode] = useState(false);
-  const [rememberDevice, setRememberDevice] = useState(true);
+  const [rememberDevice, setRememberDevice] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 

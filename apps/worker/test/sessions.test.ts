@@ -137,8 +137,8 @@ describe("session policy (§4)", () => {
     await clearTotpReplayGuard();
     const plain = await login(account, { ip: "203.0.113.104" });
     const plainCookie = plain.setCookies.find((entry) => entry.startsWith("session=")) ?? "";
-    // The idle window bounds the plain cookie; closing the browser ends it.
-    expect(plainCookie).toContain("Max-Age=2400");
+    // A plain session is a session cookie without Max-Age so closing the browser ends it.
+    expect(plainCookie).not.toContain("Max-Age=");
     expect(plainCookie).not.toContain("2592000");
   });
 

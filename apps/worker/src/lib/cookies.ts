@@ -1,9 +1,4 @@
-import {
-  CSRF_COOKIE_NAME,
-  REMEMBER_DEVICE_MAX_MS,
-  SESSION_COOKIE_NAME,
-  SESSION_IDLE_TIMEOUT_MS,
-} from "@securenotes/shared";
+import { CSRF_COOKIE_NAME, REMEMBER_DEVICE_MAX_MS, SESSION_COOKIE_NAME } from "@securenotes/shared";
 import { serialize } from "hono/utils/cookie";
 
 /**
@@ -32,10 +27,8 @@ export interface SessionCookieInput {
   rememberDevice: boolean;
 }
 
-function maxAgeSeconds(rememberDevice: boolean): number {
-  return rememberDevice
-    ? Math.floor(REMEMBER_DEVICE_MAX_MS / 1000)
-    : Math.floor(SESSION_IDLE_TIMEOUT_MS / 1000);
+function maxAgeSeconds(rememberDevice: boolean): number | undefined {
+  return rememberDevice ? Math.floor(REMEMBER_DEVICE_MAX_MS / 1000) : undefined;
 }
 
 export function applySessionCookies(response: Response, input: SessionCookieInput): Response {
@@ -48,7 +41,7 @@ export function applySessionCookies(response: Response, input: SessionCookieInpu
       secure: true,
       sameSite: "Strict",
       path: "/",
-      maxAge,
+      ...(maxAge !== undefined ? { maxAge } : {}),
     }),
   );
   response.headers.append(
@@ -58,7 +51,7 @@ export function applySessionCookies(response: Response, input: SessionCookieInpu
       secure: true,
       sameSite: "Strict",
       path: "/",
-      maxAge,
+      ...(maxAge !== undefined ? { maxAge } : {}),
     }),
   );
 

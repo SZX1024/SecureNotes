@@ -401,6 +401,10 @@ try {
   if (needsSignIn) {
     await page.fill('input[aria-label="Username"]', "e2e-account");
     await page.fill('input[aria-label="Authenticator code"]', totpFromBase32(base32Secret));
+    const rememberBox = await page.$('input[type="checkbox"]');
+    if (rememberBox && !(await rememberBox.isChecked())) {
+      await rememberBox.check();
+    }
     await page.click('button[type="submit"]');
     await page.waitForSelector('button:has-text("New note")', { timeout: 20_000 });
   }
