@@ -150,6 +150,15 @@ import {
   type Command,
 } from "./ui/shortcuts";
 import { SORT_KEYS, SORT_LABELS, rememberOpened, sortNotes, type SortKey } from "./ui/sort";
+import { countNoteStats } from "./editor/word-count";
+import { exportNoteAsMarkdown, exportNoteAsHtml, printNote } from "./export/single-note";
+import { extractOutline } from "./editor/outline";
+import { ImageLightboxModal } from "./ui/ImageLightboxModal";
+import { OutlineDrawer } from "./ui/OutlineDrawer";
+import { FloatingFormatToolbar } from "./ui/FloatingFormatToolbar";
+import { PrivacyShield } from "./ui/PrivacyShield";
+import { BUILTIN_TEMPLATES, type NoteTemplate } from "./editor/templates";
+import { computeBacklinks, transformWikiLinksToHtml } from "./editor/wikilinks";
 import "./styles/app.css";
 
 /**
@@ -295,6 +304,16 @@ export function App() {
   const [PdfModalComponent, setPdfModalComponent] = useState<ComponentType<
     import("./ui/PdfPresentationModal").PdfPresentationModalProps
   > | null>(null);
+  /** State for Zen / Focus mode */
+  const [zenMode, setZenMode] = useState(false);
+  /** State for Table of Contents / Outline drawer */
+  const [outlineOpen, setOutlineOpen] = useState(false);
+  /** State for Image Lightbox */
+  const [lightboxImage, setLightboxImage] = useState<{ src: string; alt: string } | null>(null);
+  /** State for unmasked sensitive notes */
+  const [unmaskedNoteIds, setUnmaskedNoteIds] = useState<Set<string>>(new Set());
+  /** Ref to the editor host container for floating toolbar tracking */
+  const editorHostRef = useRef<HTMLDivElement | null>(null);
   /**
    * Shows a message. Informational by default — it dismisses itself — and `"error"` for anything the person needs to
    * read after looking away, which stays until it is dismissed.
@@ -1003,24 +1022,29 @@ export function App() {
     });
   }, [db, account, draft, refresh, runRequest, openedRefs, setMessage]);
 
-  const createNote = useCallback(async () => {
-    if (!db || !account) {
-      return;
-    }
-    const context: LocalContext = {
-      db,
-      dek: account.dek,
-      userId: account.userId,
-      keyVersion: account.keyVersion,
-    };
-    const id = crypto.randomUUID();
-    await runRequest(async () => {
-      await createLocalNote(context, { id, title: "Untitled", body: "" });
-      // The freshly loaded list is used directly rather than through state.
-      const stored = await refresh(db, account);
-      openNoteFrom(stored, id);
-    });
-  }, [db, account, refresh, openNoteFrom, runRequest]);
+  const createNote = useCallback(
+    async (template?: NoteTemplate) => {
+      if (!db || !account) {
+        return;
+      }
+      const context: LocalContext = {
+        db,
+        dek: account.dek,
+        userId: account.userId,
+        keyVersion: account.keyVersion,
+      };
+      const id = crypto.randomUUID();
+      const title = template ? template.defaultTitle : "Untitled";
+      const body = template ? template.content : "";
+      await runRequest(async () => {
+        await createLocalNote(context, { id, title, body, folderId: selectedFolderId });
+        // The freshly loaded list is used directly rather than through state.
+        const stored = await refresh(db, account);
+        openNoteFrom(stored, id);
+      });
+    },
+    [db, account, refresh, openNoteFrom, runRequest, selectedFolderId],
+  );
 
   /** What the strip shows: the open ids joined to the notes they refer to, and whether each has unsaved work. */
   const tabs = useMemo<TabView[]>(
@@ -1657,6 +1681,32 @@ export function App() {
           onSelect: () => void downloadRecoveryPackage(),
         },
         { id: "sep-2", label: "", separator: true, onSelect: () => undefined },
+        {
+          id: "export-note-md",
+          label: "Export note as Markdown (.md)",
+          disabled: draft === null,
+          onSelect: () => draft && exportNoteAsMarkdown(draft.title, draft.body),
+        },
+        {
+          id: "export-note-html",
+          label: "Export note as HTML (.html)",
+          disabled: draft === null,
+          onSelect: () => {
+            if (!draft) return;
+            void loadRender().then(({ renderMarkdown }) => {
+              const html = renderMarkdown(
+                draft.title.trim().length > 0 ? `# ${draft.title}\n\n${draft.body}` : draft.body,
+              );
+              exportNoteAsHtml(draft.title, html);
+            });
+          },
+        },
+        {
+          id: "print-note",
+          label: "Print note / Save PDF…",
+          disabled: draft === null,
+          onSelect: () => printNote(),
+        },
         { id: "sep-3", label: "", separator: true, onSelect: () => undefined },
         {
           id: "recycle",
@@ -1721,6 +1771,20 @@ export function App() {
           disabled: draft === null,
           onSelect: () => setPreview((current) => !current),
         },
+        {
+          id: "zen-mode",
+          label: zenMode ? "Exit Focus Mode" : "Focus Mode",
+          shortcut: "F11",
+          checked: zenMode,
+          onSelect: () => setZenMode((z) => !z),
+        },
+        {
+          id: "outline",
+          label: outlineOpen ? "Hide Outline" : "Show Outline",
+          checked: outlineOpen,
+          disabled: draft === null,
+          onSelect: () => setOutlineOpen((o) => !o),
+        },
         { id: "sep-4", label: "", separator: true, onSelect: () => undefined },
         ...SORT_KEYS.map((key) => ({
           id: `sort-${key}`,
@@ -1758,13 +1822,54 @@ export function App() {
     [draft],
   );
 
+  const applyFormat = useCallback((prefix: string, suffix = prefix) => {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
+    const selectedText = sel.toString();
+    if (!selectedText) return;
+
+    try {
+      document.execCommand("insertText", false, `${prefix}${selectedText}${suffix}`);
+    } catch {
+      setDraft((cur) => {
+        if (!cur) return cur;
+        const idx = cur.body.indexOf(selectedText);
+        if (idx === -1) return cur;
+        const newBody =
+          cur.body.slice(0, idx) +
+          prefix +
+          selectedText +
+          suffix +
+          cur.body.slice(idx + selectedText.length);
+        return { ...cur, body: newBody };
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && zenMode) {
+        setZenMode(false);
+      }
+      if (
+        (e.key === "F11" || (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "f")) &&
+        !e.repeat
+      ) {
+        e.preventDefault();
+        setZenMode((z) => !z);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [zenMode]);
+
   const commands = useMemo<Command[]>(
-    () =>
+    () => [
       // The compiler's rule follows these actions far enough to reach the scheduler ref that deleting a note
       // touches, and cannot see that the whole path is asynchronous: a command runs when the palette is used, never
       // while the interface is being built. Narrow on purpose — the rest of the component is still checked.
       // eslint-disable-next-line react-hooks/refs
-      buildCommands({
+      ...buildCommands({
         newNote: () => void createNote(),
         search: () => setPaletteOpen(false),
         toggleSidebar: () => setSidebarVisible((visible) => !visible),
@@ -1777,6 +1882,13 @@ export function App() {
         sortBy: (key) => setSortKey(key as SortKey),
         deleteNote: () => deleteCurrentNote(),
       }),
+      ...BUILTIN_TEMPLATES.map((tmpl) => ({
+        id: `template-${tmpl.id}`,
+        label: `Template: ${tmpl.name}`,
+        keywords: "template new note",
+        run: () => void createNote(tmpl),
+      })),
+    ],
     [createNote, lockAndForget, runRequest, deleteCurrentNote],
   );
 
@@ -2019,7 +2131,7 @@ export function App() {
       />
 
       <main
-        className={`shell ${sidebarVisible ? "" : "sidebar-hidden"} ${draft ? "mobile-editing" : ""}`}
+        className={`shell ${sidebarVisible ? "" : "sidebar-hidden"} ${draft ? "mobile-editing" : ""} ${zenMode ? "zen-mode" : ""}`}
       >
         <ActivityBar
           active={sidebarVisible ? panelView : null}
@@ -2187,7 +2299,42 @@ export function App() {
               >
                 <button type="button" onClick={() => openNote(note.id)}>
                   <span className="row-head">
-                    <span className="title">{renderHighlighted(note.title, query)}</span>
+                    <span className="title">
+                      {(() => {
+                        const isSensitive =
+                          note.title.toLowerCase().includes("[private]") ||
+                          (tagLinks.get(note.id) ?? []).some(
+                            (tid) =>
+                              tagList.find((t) => t.id === tid)?.name.toLowerCase() === "private",
+                          );
+                        const isMasked = isSensitive && !unmaskedNoteIds.has(note.id);
+                        if (isMasked) {
+                          return (
+                            <span
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: "0.25rem",
+                              }}
+                            >
+                              <span style={{ letterSpacing: "2px" }}>••••••••</span>
+                              <span
+                                role="button"
+                                title="Click to reveal title"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setUnmaskedNoteIds((prev) => new Set([...prev, note.id]));
+                                }}
+                                style={{ fontSize: "0.75rem", opacity: 0.6 }}
+                              >
+                                👁️
+                              </span>
+                            </span>
+                          );
+                        }
+                        return renderHighlighted(note.title, query);
+                      })()}
+                    </span>
                     {note.pinned && <span title="Pinned">📌</span>}
                     <span className="muted">{new Date(note.updatedAt).toLocaleDateString()}</span>
                   </span>
@@ -2233,12 +2380,64 @@ export function App() {
           />
           {draft ? (
             <>
-              <input
-                className="note-title"
-                value={draft.title}
-                aria-label="Note title"
-                onChange={(event) => setDraft({ ...draft, title: event.target.value })}
-              />
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.5rem",
+                  flexWrap: "wrap",
+                  marginBottom: "0.5rem",
+                }}
+              >
+                <input
+                  className="note-title"
+                  style={{ flex: 1, minWidth: "10rem" }}
+                  value={draft.title}
+                  aria-label="Note title"
+                  onChange={(event) => setDraft({ ...draft, title: event.target.value })}
+                />
+                <span className="note-stats-bar" title="Word count and estimated reading time">
+                  {countNoteStats(draft.body).label}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setOutlineOpen((o) => !o)}
+                  title="Table of Contents / Outline"
+                  style={{ padding: "0.25rem 0.5rem", fontSize: "0.8rem", width: "auto" }}
+                >
+                  Outline
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setZenMode((z) => !z)}
+                  title="Focus / Zen mode (F11)"
+                  style={{ padding: "0.25rem 0.5rem", fontSize: "0.8rem", width: "auto" }}
+                >
+                  {zenMode ? "Exit Focus" : "Focus"}
+                </button>
+              </div>
+
+              {outlineOpen && (
+                <OutlineDrawer
+                  headings={extractOutline(draft.body)}
+                  onSelectHeading={(item) => {
+                    const editorContainer = document.querySelector(".editor-host, .preview");
+                    if (editorContainer) {
+                      const matches = Array.from(
+                        editorContainer.querySelectorAll("h1, h2, h3, h4, h5, h6"),
+                      );
+                      const match = matches.find((el) =>
+                        el.textContent?.trim().includes(item.text),
+                      );
+                      if (match) {
+                        match.scrollIntoView({ behavior: "smooth" });
+                      }
+                    }
+                  }}
+                  onClose={() => setOutlineOpen(false)}
+                />
+              )}
+
               {preview ? (
                 <MarkdownPreview
                   title={draft.title}
@@ -2248,15 +2447,37 @@ export function App() {
                     return attachmentUrls?.get(id) ?? null;
                   }}
                   onOpenPdf={(id, filename) => void startPdfPresentation(id, filename)}
+                  onOpenImage={(src, alt) => setLightboxImage({ src, alt })}
+                  onOpenWikiLink={(targetTitle) => {
+                    const found = notes.find(
+                      (n) => n.document.title.toLowerCase() === targetTitle.toLowerCase(),
+                    );
+                    if (found) {
+                      openNote(found.note.id);
+                    } else {
+                      void createNote({
+                        id: "custom",
+                        name: targetTitle,
+                        description: "",
+                        defaultTitle: targetTitle,
+                        content: "",
+                      });
+                    }
+                  }}
                 />
               ) : (
                 <div
+                  ref={editorHostRef}
                   className="editor-host"
                   data-note-id={draft.id}
                   onPaste={handlePaste}
                   onDrop={handleDrop}
                   onDragOver={(event) => event.preventDefault()}
                 >
+                  <FloatingFormatToolbar
+                    editorHostRef={editorHostRef}
+                    onApplyFormat={applyFormat}
+                  />
                   <LazyEditor
                     key={draft.id}
                     mode={editorMode}
@@ -2322,6 +2543,38 @@ export function App() {
                   });
                 }}
               />
+
+              {(() => {
+                const backlinks = draft
+                  ? computeBacklinks(
+                      notes.map((n) => ({
+                        id: n.note.id,
+                        title: n.document.title,
+                        body: n.document.body,
+                      })),
+                      draft.id,
+                      draft.title,
+                    )
+                  : [];
+                if (backlinks.length === 0) return null;
+                return (
+                  <section className="backlinks-section" aria-label="Linked references">
+                    <h3>Linked References ({backlinks.length})</h3>
+                    <ul className="backlinks-list">
+                      {backlinks.map((b) => (
+                        <li
+                          key={b.sourceNoteId}
+                          className="backlink-item"
+                          onClick={() => openNote(b.sourceNoteId)}
+                        >
+                          <div className="backlink-title">{b.sourceNoteTitle}</div>
+                          <div className="backlink-snippet">{b.snippet}</div>
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                );
+              })()}
 
               {draftAttachments.length > 0 && (
                 <section className="attachments" aria-label="Attachments">
@@ -2672,6 +2925,16 @@ export function App() {
           onClose={() => setPdfPresentation(null)}
         />
       )}
+
+      {lightboxImage && (
+        <ImageLightboxModal
+          src={lightboxImage.src}
+          alt={lightboxImage.alt}
+          onClose={() => setLightboxImage(null)}
+        />
+      )}
+
+      <PrivacyShield autoBlur={true} />
     </div>
   );
 }
@@ -2935,12 +3198,16 @@ function MarkdownPreview({
   body,
   urlForAttachment,
   onOpenPdf,
+  onOpenImage,
+  onOpenWikiLink,
 }: {
   title: string;
   body: string;
   /** A displayable URL for an attachment, or null while it is still being read. */
   urlForAttachment: (id: string) => string | null;
   onOpenPdf?: (attachmentId: string, filename: string) => void;
+  onOpenImage?: (src: string, alt: string) => void;
+  onOpenWikiLink?: (targetTitle: string) => void;
 }) {
   const container = useRef<HTMLDivElement>(null);
   const [html, setHtml] = useState<string | null>(null);
@@ -2953,7 +3220,8 @@ function MarkdownPreview({
     let cancelled = false;
     void loadRender().then(({ renderMarkdown }) => {
       if (!cancelled) {
-        setHtml(renderMarkdown(title.trim().length > 0 ? `# ${title}\n\n${body}` : body));
+        const raw = renderMarkdown(title.trim().length > 0 ? `# ${title}\n\n${body}` : body);
+        setHtml(transformWikiLinksToHtml(raw));
       }
     });
     return () => {
@@ -2972,17 +3240,39 @@ function MarkdownPreview({
         void renderMermaidBlocks(container.current);
       }
     });
+    void import("./editor/code-copy").then(({ attachCodeCopyButtons }) => {
+      if (!cancelled && container.current) {
+        attachCodeCopyButtons(container.current);
+      }
+    });
     return () => {
       cancelled = true;
     };
   }, [html]);
 
   useEffect(() => {
-    if (!container.current || !onOpenPdf) {
+    if (!container.current) {
       return;
     }
     const el = container.current;
     const handleClick = (e: MouseEvent) => {
+      const img = (e.target as HTMLElement)?.closest("img");
+      if (img && onOpenImage) {
+        e.preventDefault();
+        onOpenImage(img.src, img.alt);
+        return;
+      }
+
+      const wiki = (e.target as HTMLElement)?.closest(".wikilink");
+      if (wiki && onOpenWikiLink) {
+        e.preventDefault();
+        const targetTitle = wiki.getAttribute("data-wikilink");
+        if (targetTitle) {
+          onOpenWikiLink(targetTitle);
+          return;
+        }
+      }
+
       const target = (e.target as HTMLElement)?.closest("a");
       if (!target) return;
       const href = target.getAttribute("href") ?? "";
@@ -2990,12 +3280,12 @@ function MarkdownPreview({
       const text = target.textContent ?? "";
       if (match && (text.toLowerCase().endsWith(".pdf") || href.toLowerCase().endsWith(".pdf"))) {
         e.preventDefault();
-        onOpenPdf(match[1]!, text || "document.pdf");
+        onOpenPdf?.(match[1]!, text || "document.pdf");
       }
     };
     el.addEventListener("click", handleClick);
     return () => el.removeEventListener("click", handleClick);
-  }, [html, onOpenPdf]);
+  }, [html, onOpenPdf, onOpenImage, onOpenWikiLink]);
 
   if (html === null) {
     return <p className="muted">Rendering…</p>;
