@@ -364,4 +364,42 @@ describe("choosing a side (§16)", () => {
     // No overlap: the merge is clean, and nothing is marked.
     expect(textForChoice({ sides, choice: "merged" })).toBe("same\nchanged\n");
   });
+
+  it("gracefully loads conflict when remote ciphertext fails to decrypt", async () => {
+    const { db, dek, envelopeAt, close } = await fixture();
+    await db.notes.put({
+      id: NOTE_ID,
+      folderId: "folder-1",
+      revision: 1,
+      payload: (await envelopeAt(1, "# Local version\n")) as never,
+      deletedAt: null,
+      pinned: false,
+      sortOrder: 0,
+      createdAt: 1,
+      updatedAt: 1,
+      syncedAt: null,
+    });
+    stubApi({
+      remoteRevision: 2,
+      remote: {
+        crypto_version: 1,
+        key_version: KEY_VERSION,
+        alg: "AES-256-GCM",
+        iv: "dGVzdC1pdi0xMjM0",
+        ciphertext: "YmFkLWNpcGhlcnRleHQ=",
+      },
+      local: {},
+      baseRevision: 1,
+      revisions: [],
+    });
+
+    const sides = await loadNoteConflict(
+      { db, dek, keyVersion: KEY_VERSION, userId: USER_ID },
+      NOTE_ID,
+    );
+    expect(sides).not.toBeNull();
+    expect(sides!.local).toBe("# Local version\n");
+    expect(sides!.remote).toContain("Remote note could not be decrypted");
+    await close();
+  });
 });

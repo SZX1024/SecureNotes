@@ -266,6 +266,16 @@ export function App() {
   const [usage, setUsage] = useState<{ usedBytes: number; limitBytes: number } | null>(null);
   /** True while the pointer is over the message, which stops the clock rather than taking it away mid-sentence. */
   const [toastPaused, setToastPaused] = useState(false);
+  /** State for full-screen PDF presentation viewer */
+  const [pdfPresentation, setPdfPresentation] = useState<{
+    id: string;
+    name: string;
+    bytes: Uint8Array | null;
+    loading: boolean;
+  } | null>(null);
+  const [PdfModalComponent, setPdfModalComponent] = useState<ComponentType<
+    import("./ui/PdfPresentationModal").PdfPresentationModalProps
+  > | null>(null);
   /**
    * Shows a message. Informational by default — it dismisses itself — and `"error"` for anything the person needs to
    * read after looking away, which stays until it is dismissed.
@@ -1275,12 +1285,48 @@ export function App() {
         return current;
       }
       const pattern = new RegExp(
-        `!\\[[^\\]]*\\]\\(${ATTACHMENT_URL_PREFIX}${id}/content\\)\\n?`,
+        `!?\\[[^\\]]*\\]\\(${ATTACHMENT_URL_PREFIX}${id}/content\\)\\n?`,
         "g",
       );
       return { ...current, body: current.body.replace(pattern, "") };
     });
   }, []);
+
+  /** Starts the full-screen presentation viewer for a PDF attachment. */
+  const startPdfPresentation = useCallback(
+    async (attachmentId: string, filename: string) => {
+      if (!account) return;
+      setPdfPresentation({ id: attachmentId, name: filename, bytes: null, loading: true });
+      try {
+        const [{ PdfPresentationModal }, row] = await Promise.all([
+          import("./ui/PdfPresentationModal"),
+          db?.attachments.get(attachmentId),
+        ]);
+        setPdfModalComponent(() => PdfPresentationModal);
+
+        let bytes: Uint8Array;
+        if (row?.cachedBlob && row.contentIv !== null) {
+          const res = await fetchAttachment(account.dek, account.keyVersion, attachmentId, {
+            bytes: new Uint8Array(await row.cachedBlob.arrayBuffer()) as Bytes,
+            contentIv: row.contentIv,
+            contentType: row.contentType,
+          });
+          bytes = res.bytes;
+        } else {
+          const res = await fetchAttachment(account.dek, account.keyVersion, attachmentId);
+          bytes = res.bytes;
+        }
+        setPdfPresentation({ id: attachmentId, name: filename, bytes, loading: false });
+      } catch (err: unknown) {
+        setPdfPresentation(null);
+        setMessage(
+          err instanceof Error ? err.message : "The PDF attachment could not be read.",
+          "error",
+        );
+      }
+    },
+    [account, db, setMessage],
+  );
 
   /**
    * Inserts images, encrypting them here and queueing the upload (§7, §12, §32).
@@ -2168,6 +2214,7 @@ export function App() {
                     void attachmentVersion;
                     return attachmentUrls?.get(id) ?? null;
                   }}
+                  onOpenPdf={(id, filename) => void startPdfPresentation(id, filename)}
                 />
               ) : (
                 <div
@@ -2266,6 +2313,18 @@ export function App() {
                             ? attachment.label
                             : `${attachment.id.slice(0, 8)}…`}
                         </a>
+                        {/\.pdf$/i.test(attachment.label) && (
+                          <button
+                            type="button"
+                            className="present-btn"
+                            onClick={() =>
+                              void startPdfPresentation(attachment.id, attachment.label)
+                            }
+                            title="Present PDF in full screen"
+                          >
+                            Present
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => removeAttachmentReference(attachment.id)}
@@ -2569,6 +2628,15 @@ export function App() {
           onClose={() => setSettingsOpen(false)}
         />
       )}
+
+      {pdfPresentation && PdfModalComponent && (
+        <PdfModalComponent
+          filename={pdfPresentation.name}
+          bytes={pdfPresentation.bytes}
+          loading={pdfPresentation.loading}
+          onClose={() => setPdfPresentation(null)}
+        />
+      )}
     </div>
   );
 }
@@ -2641,14 +2709,34 @@ function ConflictPanel({
     }
   };
 
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
   return (
     <div className="palette conflict-panel" role="dialog" aria-label="Resolve conflict">
-      <h2>Resolve conflict</h2>
+      <div className="conflict-panel-header">
+        <h2>Resolve conflict</h2>
+        <button type="button" aria-label="Close" className="conflict-close-btn" onClick={onClose}>
+          ✕
+        </button>
+      </div>
 
       {error && <p className="error">{error}</p>}
 
       {sides === null ? (
-        <p className="muted">Loading the three versions…</p>
+        <>
+          {!error && <p className="muted">Loading the three versions…</p>}
+          <button type="button" onClick={onClose}>
+            Close
+          </button>
+        </>
       ) : suggestion !== null ? (
         <>
           <p className="muted">
@@ -2811,11 +2899,13 @@ function MarkdownPreview({
   title,
   body,
   urlForAttachment,
+  onOpenPdf,
 }: {
   title: string;
   body: string;
   /** A displayable URL for an attachment, or null while it is still being read. */
   urlForAttachment: (id: string) => string | null;
+  onOpenPdf?: (attachmentId: string, filename: string) => void;
 }) {
   const container = useRef<HTMLDivElement>(null);
   const [html, setHtml] = useState<string | null>(null);
@@ -2851,6 +2941,26 @@ function MarkdownPreview({
       cancelled = true;
     };
   }, [html]);
+
+  useEffect(() => {
+    if (!container.current || !onOpenPdf) {
+      return;
+    }
+    const el = container.current;
+    const handleClick = (e: MouseEvent) => {
+      const target = (e.target as HTMLElement)?.closest("a");
+      if (!target) return;
+      const href = target.getAttribute("href") ?? "";
+      const match = new RegExp(`${ATTACHMENT_URL_PREFIX}([0-9a-fA-F-]{36})/content`).exec(href);
+      const text = target.textContent ?? "";
+      if (match && (text.toLowerCase().endsWith(".pdf") || href.toLowerCase().endsWith(".pdf"))) {
+        e.preventDefault();
+        onOpenPdf(match[1]!, text || "document.pdf");
+      }
+    };
+    el.addEventListener("click", handleClick);
+    return () => el.removeEventListener("click", handleClick);
+  }, [html, onOpenPdf]);
 
   if (html === null) {
     return <p className="muted">Rendering…</p>;

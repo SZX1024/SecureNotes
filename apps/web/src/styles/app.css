@@ -109,6 +109,20 @@
 .pane header {
   display: flex;
   gap: 0.5rem;
+  align-items: center;
+  min-width: 0;
+  width: 100%;
+}
+
+.pane header input[type="search"],
+.pane header input {
+  flex: 1;
+  min-width: 0;
+  width: 0;
+}
+
+.pane header button {
+  flex-shrink: 0;
 }
 
 .pane-single {
@@ -583,6 +597,35 @@ textarea:focus {
   max-width: 94vw;
   max-height: 84vh;
   overflow: auto;
+}
+
+.conflict-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.conflict-panel-header h2 {
+  margin: 0;
+}
+
+.conflict-close-btn {
+  width: auto !important;
+  min-height: auto !important;
+  padding: 0.25rem 0.5rem !important;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+}
+
+.conflict-close-btn:hover {
+  color: var(--text);
+  background: var(--bg-hover) !important;
 }
 
 .conflict-columns {
@@ -1508,4 +1551,145 @@ button.status-item:hover:not(:disabled) {
   align-items: center;
   font-size: var(--text-xs);
   color: var(--muted);
+}
+
+/* Fullscreen PDF presentation / slideshow viewer */
+.pdf-presentation-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+  user-select: none;
+}
+
+.pdf-presentation-overlay.controls-hidden {
+  cursor: none;
+}
+
+.pdf-slide-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.pdf-canvas {
+  max-width: 100%;
+  max-height: 100%;
+  background: #fff;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.85);
+}
+
+.pdf-status {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  padding: 1rem 1.5rem;
+  font-size: 1.1rem;
+  color: #fff;
+  background: rgba(20, 20, 20, 0.85);
+  border-radius: var(--radius);
+  transform: translate(-50%, -50%);
+}
+
+.pdf-status.error {
+  color: var(--danger, #ff6b6b);
+}
+
+.pdf-presentation-toolbar {
+  position: fixed;
+  bottom: 2rem;
+  left: 50%;
+  z-index: 10000;
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  padding: 0.5rem 1rem;
+  color: #fff;
+  background: rgba(25, 25, 25, 0.85);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 2rem;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  transform: translateX(-50%);
+  transition:
+    opacity 0.3s ease,
+    transform 0.3s ease;
+}
+
+.pdf-presentation-overlay.controls-hidden .pdf-presentation-toolbar {
+  pointer-events: none;
+  opacity: 0;
+  transform: translateX(-50%) translateY(12px);
+}
+
+.pdf-filename {
+  max-width: 12rem;
+  padding-right: 0.75rem;
+  overflow: hidden;
+  font-size: 0.85rem;
+  color: #ccc;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-right: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.pdf-nav-group,
+.pdf-action-group {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.pdf-page-indicator {
+  min-width: 3.5rem;
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+  color: #eee;
+  text-align: center;
+}
+
+.pdf-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem !important;
+  min-height: 2rem !important;
+  height: 2rem !important;
+  padding: 0 !important;
+  color: #eee;
+  cursor: pointer;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 50% !important;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+.pdf-btn:hover:not(:disabled) {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.18) !important;
+}
+
+.pdf-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.3;
+}
+
+.pdf-btn-close:hover {
+  color: #ff6b6b;
+  background: rgba(255, 80, 80, 0.25) !important;
+}
+
+.attachments li .present-btn {
+  margin-left: auto;
+  margin-right: 0.5rem;
 }

@@ -13,6 +13,7 @@ import {
   ArrowDownUp,
   Check,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   CircleAlert,
   CircleHelp,
@@ -32,10 +33,13 @@ import {
   Moon,
   NotebookText,
   Paperclip,
+  Maximize2,
+  Minimize2,
   PanelLeft,
   Pencil,
   PenLine,
   Plus,
+  Presentation,
   RefreshCw,
   Save,
   Search,
@@ -106,6 +110,11 @@ export const icons = {
   sidebar: PanelLeft,
   menu: Menu,
   help: CircleHelp,
+  presentation: Presentation,
+  maximize: Maximize2,
+  minimize: Minimize2,
+  prev: ChevronLeft,
+  next: ChevronRight,
 } satisfies Record<string, LucideIcon>;
 
 export type IconName = keyof typeof icons;

@@ -80,18 +80,29 @@ export async function loadNoteConflict(
     return null;
   }
 
-  const remote = await decryptAt(
-    deps.dek,
-    noteId,
-    conflict.remoteRevision,
-    conflict.remote as CryptoEnvelope,
-  );
-  const local = await decryptAt(
-    deps.dek,
-    noteId,
-    localRow.revision,
-    localRow.payload as CryptoEnvelope,
-  );
+  let remote: string;
+  try {
+    remote = await decryptAt(
+      deps.dek,
+      noteId,
+      conflict.remoteRevision,
+      conflict.remote as CryptoEnvelope,
+    );
+  } catch (err) {
+    remote = `[Remote note could not be decrypted: ${err instanceof Error ? err.message : String(err)}]`;
+  }
+
+  let local: string;
+  try {
+    local = await decryptAt(
+      deps.dek,
+      noteId,
+      localRow.revision,
+      localRow.payload as CryptoEnvelope,
+    );
+  } catch (err) {
+    local = `[Local note could not be decrypted: ${err instanceof Error ? err.message : String(err)}]`;
+  }
 
   let base: string | null = null;
   if (conflict.baseRevision !== null) {
@@ -100,7 +111,11 @@ export async function loadNoteConflict(
     }>(`/notes/${noteId}/revisions`);
     const ancestor = revisions.find((entry) => entry.revision === conflict.baseRevision);
     if (ancestor) {
-      base = await decryptAt(deps.dek, noteId, ancestor.revision, ancestor.payload);
+      try {
+        base = await decryptAt(deps.dek, noteId, ancestor.revision, ancestor.payload);
+      } catch {
+        base = null;
+      }
     }
   }
 

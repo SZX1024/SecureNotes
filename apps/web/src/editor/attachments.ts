@@ -75,7 +75,7 @@ export interface AttachmentReference {
  */
 export function attachmentReferencesIn(markdown: string): AttachmentReference[] {
   const pattern = new RegExp(
-    `!\\[([^\\]]*)\\]\\(${ATTACHMENT_URL_PREFIX}([0-9a-fA-F-]{36})/content\\)`,
+    `!?\\[([^\\]]*)\\]\\(${ATTACHMENT_URL_PREFIX}([0-9a-fA-F-]{36})/content\\)`,
     "g",
   );
   const found = new Map<string, string>();
